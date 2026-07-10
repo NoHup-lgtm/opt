@@ -11,10 +11,12 @@ if (-not (Test-Path $dist)) { New-Item -ItemType Directory -Path $dist | Out-Nul
 $core = Get-Content (Join-Path $root 'OptimizerCore.ps1') -Raw -Encoding UTF8
 $app  = Get-Content (Join-Path $root 'OptimizerApp.ps1')  -Raw -Encoding UTF8
 
-# Embute o Core no lugar do dot-source (o .exe precisa ser um arquivo só)
-$dotSourceLine = ". (Join-Path `$PSScriptRoot 'OptimizerCore.ps1')"
-if (-not $app.Contains($dotSourceLine)) { throw 'Linha de dot-source não encontrada em OptimizerApp.ps1 — build desatualizado.' }
-$merged = $app.Replace($dotSourceLine, $core)
+# Injeta o texto do Core no marcador (o .exe precisa ser um arquivo só; o App
+# usa $script:CoreText tanto para si quanto para os jobs em background)
+$marker = '# ==CORE-INJECT=='
+if (-not $app.Contains($marker)) { throw "Marcador '$marker' não encontrado em OptimizerApp.ps1 — build desatualizado." }
+$inject = "`$script:CoreText = @'`n$core`n'@"
+$merged = $app.Replace($marker, $inject)
 
 $mergedPath = Join-Path $dist 'OptimizerApp.merged.ps1'
 [IO.File]::WriteAllText($mergedPath, $merged, (New-Object Text.UTF8Encoding $true))

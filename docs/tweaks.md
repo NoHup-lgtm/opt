@@ -61,11 +61,31 @@ Risco: **Seguro** (efeito conhecido, sem colateral) · **Moderado** (efeito real
 - **Impacto:** o Windows deixa de reduzir clock de processos "em segundo plano" (overlays, anti-cheat, Discord). Colateral: maior consumo de energia (relevante em notebook).
 - **Fonte:** Microsoft Learn — Power Throttling (Windows 10 1709+); requer reinício.
 
-## HAGS — Agendamento de GPU por hardware (Avançado)
+## WindowedOpt — Otimizações para jogos em janela (Seguro · GPU · só Win11)
 
-- **O que faz:** `HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\HwSchMode = 2`. Requer GPU/driver compatível e reinício.
+- **O que faz:** `HKCU\Software\Microsoft\DirectX\UserGpuPreferences\DirectXUserGlobalSettings = "SwapEffectUpgradeEnable=1;"`.
+- **Impacto:** habilita o modelo de apresentação moderno (flip) para jogos DX10/11 em janela/borderless — menor latência para quem joga em janela sem borda. Recurso oficial do Windows 11; o app o marca como indisponível no Windows 10.
+- **Colateral:** se o valor já contém outras flags (ex.: VRR), o original fica preservado no backup.
+- **Fonte:** Microsoft DirectX Developer Blog — "Optimizations for windowed games" (2022).
+
+## HAGS — Agendamento de GPU por hardware (Avançado · GPU)
+
+- **O que faz:** `HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\HwSchMode = 2`. Requer GPU dedicada com driver compatível (NVIDIA GTX 10xx+/RTX, AMD RX 5000+) e reinício.
 - **Impacto:** move o agendamento de GPU para o hardware. Em algumas GPUs melhora latência de frame; em outras piora ou causa stutter. Por isso é Avançado e NUNCA entra em lote/um-clique.
+- **Detecção:** o app detecta a GPU via `Win32_VideoController` e desabilita este tweak em máquinas só com GPU integrada.
 - **Fonte:** Microsoft DirectX Developer Blog — "Hardware Accelerated GPU Scheduling" (2020).
+
+## MPO — Desativar Multi-Plane Overlay (Avançado · GPU)
+
+- **O que faz:** `HKLM\SOFTWARE\Microsoft\Windows\Dwm\OverlayTestMode = 5`. Requer reinício.
+- **Impacto:** desliga o MPO do compositor. Correção conhecida para stutter, flicker e tela preta em setups NVIDIA/AMD com G-Sync/FreeSync e overlays. **Só faz sentido para quem tem os sintomas** — a descrição no app diz isso explicitamente.
+- **Fonte:** NVIDIA KB 5157 ("flickering/stuttering — disable MPO") e relatos equivalentes no suporte da AMD; a própria Microsoft usou esse valor de teste.
+
+---
+
+## Sobre otimizações específicas de NVIDIA/AMD
+
+O que tem impacto real por fabricante (NVIDIA Reflex, "prefer maximum performance", Radeon Anti-Lag, sharpening) vive no **perfil do driver**, não no registro do Windows — e será exposto via perfis por jogo (Fase 4) ou instruções de modo manual, nunca via hack de registro não documentado. GPU integrada se beneficia principalmente de: plano de energia, VisualFX e GameDVR — que já estão no catálogo.
 
 ---
 
@@ -74,3 +94,6 @@ Risco: **Seguro** (efeito conhecido, sem colateral) · **Moderado** (efeito real
 - Desativar serviços essenciais do Windows (SysMain, Defender, etc.) — quebra PC, viola a regra 4.
 - "Limpeza de RAM" / ISLC-like — placebo na maioria dos casos, viola a regra de honestidade.
 - Undervolt/overclock — nunca em um clique (regra 5); entra só em modo manual/avançado no futuro.
+- ULPS off (`EnableUlps=0`, AMD) — mexe em chave de classe do driver, é resetado a cada update de driver e o benefício é restrito a CrossFire; risco > ganho.
+- `TdrDelay`/`TdrLevel` — não é otimização: só mascara crash de driver e piora o diagnóstico.
+- Tweaks via nvidiaProfileInspector — exige baixar binário de terceiro e escreve no banco DRS sem API documentada; fora do produto até existir caminho suportado.

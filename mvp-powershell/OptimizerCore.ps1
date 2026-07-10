@@ -8,8 +8,9 @@
 $script:DataDir    = Join-Path $env:LOCALAPPDATA 'Optimizer'
 $script:BackupFile = Join-Path $script:DataDir 'backup.json'
 $script:LogFile    = Join-Path $script:DataDir 'optimizer.log'
-$script:LogSink    = $null   # scriptblock opcional — a GUI pluga aqui para espelhar o log na tela
+$script:LogSink    = $null   # scriptblock opcional — espelha o log em outra saída
 $script:Backup     = @{}
+$script:GpuCache   = $null
 
 # ---------------------------------------------------------------------------
 # Infraestrutura: log e backup
@@ -64,6 +65,45 @@ function New-OptimizerRestorePoint {
         Write-OptLog "Não foi possível criar ponto de restauração: $($_.Exception.Message)" 'WARN'
         return $false
     }
+}
+
+# ---------------------------------------------------------------------------
+# Detecção de GPU (NVIDIA / AMD / integrada)
+# ---------------------------------------------------------------------------
+
+function Get-GpuInfo {
+    if ($null -ne $script:GpuCache) { return $script:GpuCache }
+    $list = @()
+    try {
+        foreach ($v in (Get-CimInstance Win32_VideoController -ErrorAction Stop)) {
+            if (-not $v.Name) { continue }
+            $vendor = 'Outro'
+            if ($v.Name -match 'NVIDIA|GeForce|Quadro|RTX|GTX') { $vendor = 'NVIDIA' }
+            elseif ($v.Name -match 'AMD|Radeon|ATI') { $vendor = 'AMD' }
+            elseif ($v.Name -match 'Intel|UHD|Iris|Arc') { $vendor = 'Intel' }
+            # Heurística: Intel (exceto Arc) e APUs AMD ("Radeon(TM) Graphics"/Vega) = integrada
+            $integrada = ($vendor -eq 'Intel' -and $v.Name -notmatch 'Arc') -or
+                         ($vendor -eq 'AMD' -and $v.Name -match '\(TM\) Graphics|Vega')
+            $list += [pscustomobject]@{
+                Name      = $v.Name
+                Vendor    = $vendor
+                Driver    = $v.DriverVersion
+                Integrada = $integrada
+            }
+        }
+    } catch {
+        Write-OptLog "Falha detectando GPU: $_" 'WARN'
+    }
+    $script:GpuCache = $list
+    return $list
+}
+
+function Get-MainGpu {
+    $g = @(Get-GpuInfo)
+    $dgpu = @($g | Where-Object { -not $_.Integrada })
+    if ($dgpu.Count -gt 0) { return $dgpu[0] }
+    if ($g.Count -gt 0) { return $g[0] }
+    return $null
 }
 
 # ---------------------------------------------------------------------------
@@ -147,61 +187,55 @@ $script:HighPerfGuid = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
 # ---------------------------------------------------------------------------
 # Catálogo de otimizações de SISTEMA (camada 1 — vale para qualquer jogo).
 # Otimizações POR JOGO virão dos perfis JSON (Fase 4), nunca deste catálogo.
+#
+# Formato declarativo: tweaks de registro descrevem seus alvos em `Alvos`
+# (Path/Name/Valor/Tipo) e ganham Apply/Revert/Test genéricos — o mesmo dado
+# alimenta a tela de transparência ("o que exatamente vai mudar").
+# Casos especiais (powercfg, Nagle) usam Apply/Revert/Test próprios.
+# `Disponivel` retorna $null (ok) ou o motivo de não se aplicar a esta máquina.
 # ---------------------------------------------------------------------------
 
+function New-Tweak([hashtable]$P) {
+    foreach ($k in 'Alvos','Apply','Revert','Test','Disponivel','DetalhesTexto') {
+        if (-not $P.ContainsKey($k)) { $P[$k] = $null }
+    }
+    if (-not $P.ContainsKey('RequerAdmin'))    { $P['RequerAdmin'] = $false }
+    if (-not $P.ContainsKey('RequerReinicio')) { $P['RequerReinicio'] = $false }
+    [pscustomobject]$P
+}
+
 $script:Tweaks = @(
-    [pscustomobject]@{
-        Id            = 'GameDVR'
-        Nome          = 'Desativar Game DVR (gravação em segundo plano)'
-        Categoria     = 'Sistema'
-        Risco         = 'Seguro'
-        Descricao     = 'Desliga a captura de gameplay do Xbox Game Bar que roda em segundo plano.'
-        Efeito        = 'Remove overhead de gravação; ganho pequeno mas consistente de frametime.'
-        RequerAdmin   = $false
-        RequerReinicio = $false
-        Apply = {
-            Set-RegValueBacked -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_Enabled' -Value 0 -Type DWord
-            Set-RegValueBacked -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR' -Name 'AppCaptureEnabled' -Value 0 -Type DWord
-        }
-        Revert = {
-            Restore-RegValueBacked -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_Enabled'
-            Restore-RegValueBacked -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR' -Name 'AppCaptureEnabled'
-        }
-        Test = {
-            $a = Get-RegValueInfo -Path 'HKCU:\System\GameConfigStore' -Name 'GameDVR_Enabled'
-            $b = Get-RegValueInfo -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR' -Name 'AppCaptureEnabled'
-            ($a.Existed -and $a.Value -eq 0) -and ($b.Existed -and $b.Value -eq 0)
-        }
-    }
-    [pscustomobject]@{
-        Id            = 'GameMode'
-        Nome          = 'Ativar Modo de Jogo do Windows'
-        Categoria     = 'Sistema'
-        Risco         = 'Seguro'
-        Descricao     = 'Garante que o Game Mode nativo do Windows está ligado.'
-        Efeito        = 'Prioriza o jogo e evita instalação de updates/notificações durante partidas.'
-        RequerAdmin   = $false
-        RequerReinicio = $false
-        Apply = {
-            Set-RegValueBacked -Path 'HKCU:\SOFTWARE\Microsoft\GameBar' -Name 'AutoGameModeEnabled' -Value 1 -Type DWord
-        }
-        Revert = {
-            Restore-RegValueBacked -Path 'HKCU:\SOFTWARE\Microsoft\GameBar' -Name 'AutoGameModeEnabled'
-        }
-        Test = {
-            $a = Get-RegValueInfo -Path 'HKCU:\SOFTWARE\Microsoft\GameBar' -Name 'AutoGameModeEnabled'
-            $a.Existed -and $a.Value -eq 1
-        }
-    }
-    [pscustomobject]@{
-        Id            = 'Power'
-        Nome          = 'Plano de energia: Alto Desempenho'
-        Categoria     = 'Energia'
-        Risco         = 'Seguro'
-        Descricao     = 'Troca o plano de energia ativo para Alto Desempenho (o plano anterior fica salvo no backup).'
-        Efeito        = 'CPU deixa de reduzir clock agressivamente; melhora consistência de frametime.'
-        RequerAdmin   = $false
-        RequerReinicio = $false
+    (New-Tweak @{
+        Id        = 'GameDVR'
+        Nome      = 'Desativar Game DVR (gravação em segundo plano)'
+        Categoria = 'Sistema'
+        Risco     = 'Seguro'
+        Descricao = 'Desliga a captura de gameplay do Xbox Game Bar que roda em segundo plano.'
+        Efeito    = 'Remove overhead de gravação; ganho pequeno mas consistente de frametime.'
+        Alvos     = @(
+            @{ Path = 'HKCU:\System\GameConfigStore'; Name = 'GameDVR_Enabled'; Valor = 0; Tipo = 'DWord' }
+            @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\GameDVR'; Name = 'AppCaptureEnabled'; Valor = 0; Tipo = 'DWord' }
+        )
+    })
+    (New-Tweak @{
+        Id        = 'GameMode'
+        Nome      = 'Ativar Modo de Jogo do Windows'
+        Categoria = 'Sistema'
+        Risco     = 'Seguro'
+        Descricao = 'Garante que o Game Mode nativo do Windows está ligado.'
+        Efeito    = 'Prioriza o jogo e evita instalação de updates/notificações durante partidas.'
+        Alvos     = @(
+            @{ Path = 'HKCU:\SOFTWARE\Microsoft\GameBar'; Name = 'AutoGameModeEnabled'; Valor = 1; Tipo = 'DWord' }
+        )
+    })
+    (New-Tweak @{
+        Id        = 'Power'
+        Nome      = 'Plano de energia: Alto Desempenho'
+        Categoria = 'Energia'
+        Risco     = 'Seguro'
+        Descricao = 'Troca o plano de energia ativo para Alto Desempenho (o plano anterior fica salvo no backup).'
+        Efeito    = 'CPU deixa de reduzir clock agressivamente; melhora consistência de frametime.'
+        DetalhesTexto = @('powercfg /setactive → Alto Desempenho (o plano atual fica salvo no backup)')
         Apply = {
             $key = 'powercfg|activescheme'
             if (-not $script:Backup.ContainsKey($key)) {
@@ -229,110 +263,69 @@ $script:Tweaks = @(
             }
         }
         Test = { (Get-ActivePowerScheme) -eq $script:HighPerfGuid }
-    }
-    [pscustomobject]@{
-        Id            = 'MouseAccel'
-        Nome          = 'Desativar aceleração do mouse'
-        Categoria     = 'Entrada'
-        Risco         = 'Seguro'
-        Descricao     = 'Desliga "Aumentar a precisão do ponteiro" (aceleração). Vale a partir do próximo logon.'
-        Efeito        = 'Mira consistente: o mesmo movimento físico sempre vira o mesmo movimento na tela. Não afeta FPS.'
-        RequerAdmin   = $false
-        RequerReinicio = $false
-        Apply = {
-            Set-RegValueBacked -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseSpeed' -Value '0' -Type String
-            Set-RegValueBacked -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseThreshold1' -Value '0' -Type String
-            Set-RegValueBacked -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseThreshold2' -Value '0' -Type String
-        }
-        Revert = {
-            Restore-RegValueBacked -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseSpeed'
-            Restore-RegValueBacked -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseThreshold1'
-            Restore-RegValueBacked -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseThreshold2'
-        }
-        Test = {
-            $a = Get-RegValueInfo -Path 'HKCU:\Control Panel\Mouse' -Name 'MouseSpeed'
-            $a.Existed -and $a.Value -eq '0'
-        }
-    }
-    [pscustomobject]@{
-        Id            = 'VisualFX'
-        Nome          = 'Efeitos visuais: melhor desempenho'
-        Categoria     = 'Sistema'
-        Risco         = 'Moderado'
-        Descricao     = 'Configura os efeitos visuais do Windows para "Ajustar para obter melhor desempenho". Muda a aparência do Windows; vale a partir do próximo logon.'
-        Efeito        = 'Libera CPU/GPU de animações e sombras do Windows; ajuda em PCs mais fracos.'
-        RequerAdmin   = $false
-        RequerReinicio = $false
-        Apply = {
-            Set-RegValueBacked -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2 -Type DWord
-        }
-        Revert = {
-            Restore-RegValueBacked -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting'
-        }
-        Test = {
-            $a = Get-RegValueInfo -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting'
-            $a.Existed -and $a.Value -eq 2
-        }
-    }
-    [pscustomobject]@{
-        Id            = 'GpuPref'
-        Nome          = 'Prioridade alta de GPU/CPU para jogos'
-        Categoria     = 'Sistema'
-        Risco         = 'Moderado'
-        Descricao     = 'Ajusta o perfil multimídia do Windows para agendar jogos com prioridade de GPU 8 e CPU alta.'
-        Efeito        = 'Jogos ganham prioridade no escalonador. Impacto debatível (depende da carga do PC), sem risco conhecido.'
-        RequerAdmin   = $true
-        RequerReinicio = $false
-        Apply = {
-            $p = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'
-            Set-RegValueBacked -Path $p -Name 'GPU Priority' -Value 8 -Type DWord
-            Set-RegValueBacked -Path $p -Name 'Priority' -Value 6 -Type DWord
-            Set-RegValueBacked -Path $p -Name 'Scheduling Category' -Value 'High' -Type String
-        }
-        Revert = {
-            $p = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'
-            Restore-RegValueBacked -Path $p -Name 'GPU Priority'
-            Restore-RegValueBacked -Path $p -Name 'Priority'
-            Restore-RegValueBacked -Path $p -Name 'Scheduling Category'
-        }
-        Test = {
-            $a = Get-RegValueInfo -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games' -Name 'GPU Priority'
-            $a.Existed -and $a.Value -eq 8
-        }
-    }
-    [pscustomobject]@{
-        Id            = 'NetThrottle'
-        Nome          = 'Remover limitação de rede para multimídia'
-        Categoria     = 'Rede'
-        Risco         = 'Moderado'
-        Descricao     = 'Desativa o Network Throttling do Windows (que limita pacotes/ms quando há multimídia rodando) e reduz a reserva de CPU para processos em segundo plano.'
-        Efeito        = 'Pode reduzir lag em jogos online. Impacto debatível — medir antes/depois.'
-        RequerAdmin   = $true
+    })
+    (New-Tweak @{
+        Id        = 'MouseAccel'
+        Nome      = 'Desativar aceleração do mouse'
+        Categoria = 'Entrada'
+        Risco     = 'Seguro'
+        Descricao = 'Desliga "Aumentar a precisão do ponteiro" (aceleração). Vale a partir do próximo logon.'
+        Efeito    = 'Mira consistente: o mesmo movimento físico sempre vira o mesmo movimento na tela. Não afeta FPS.'
+        Alvos     = @(
+            @{ Path = 'HKCU:\Control Panel\Mouse'; Name = 'MouseSpeed'; Valor = '0'; Tipo = 'String' }
+            @{ Path = 'HKCU:\Control Panel\Mouse'; Name = 'MouseThreshold1'; Valor = '0'; Tipo = 'String' }
+            @{ Path = 'HKCU:\Control Panel\Mouse'; Name = 'MouseThreshold2'; Valor = '0'; Tipo = 'String' }
+        )
+    })
+    (New-Tweak @{
+        Id        = 'VisualFX'
+        Nome      = 'Efeitos visuais: melhor desempenho'
+        Categoria = 'Sistema'
+        Risco     = 'Moderado'
+        Descricao = 'Configura os efeitos visuais do Windows para "melhor desempenho". Muda a aparência do Windows; vale a partir do próximo logon.'
+        Efeito    = 'Libera CPU/GPU de animações e sombras do Windows; ajuda em PCs mais fracos.'
+        Alvos     = @(
+            @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'; Name = 'VisualFXSetting'; Valor = 2; Tipo = 'DWord' }
+        )
+    })
+    (New-Tweak @{
+        Id        = 'GpuPref'
+        Nome      = 'Prioridade alta de GPU/CPU para jogos'
+        Categoria = 'Sistema'
+        Risco     = 'Moderado'
+        Descricao = 'Ajusta o perfil multimídia do Windows para agendar jogos com prioridade de GPU 8 e CPU alta.'
+        Efeito    = 'Jogos ganham prioridade no escalonador. Impacto debatível (depende da carga do PC), sem risco conhecido.'
+        RequerAdmin = $true
+        Alvos     = @(
+            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'; Name = 'GPU Priority'; Valor = 8; Tipo = 'DWord' }
+            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'; Name = 'Priority'; Valor = 6; Tipo = 'DWord' }
+            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games'; Name = 'Scheduling Category'; Valor = 'High'; Tipo = 'String' }
+        )
+    })
+    (New-Tweak @{
+        Id        = 'NetThrottle'
+        Nome      = 'Remover limitação de rede para multimídia'
+        Categoria = 'Rede'
+        Risco     = 'Moderado'
+        Descricao = 'Desativa o Network Throttling do Windows (que limita pacotes/ms quando há multimídia rodando) e reduz a reserva de CPU para processos em segundo plano.'
+        Efeito    = 'Pode reduzir lag em jogos online. Impacto debatível — medir antes/depois.'
+        RequerAdmin = $true
         RequerReinicio = $true
-        Apply = {
-            $p = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
-            Set-RegValueBacked -Path $p -Name 'NetworkThrottlingIndex' -Value (-1) -Type DWord  # 0xFFFFFFFF = desativado
-            Set-RegValueBacked -Path $p -Name 'SystemResponsiveness' -Value 10 -Type DWord      # padrão é 20
-        }
-        Revert = {
-            $p = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'
-            Restore-RegValueBacked -Path $p -Name 'NetworkThrottlingIndex'
-            Restore-RegValueBacked -Path $p -Name 'SystemResponsiveness'
-        }
-        Test = {
-            $a = Get-RegValueInfo -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile' -Name 'NetworkThrottlingIndex'
-            $a.Existed -and $a.Value -eq -1
-        }
-    }
-    [pscustomobject]@{
-        Id            = 'Nagle'
-        Nome          = 'Desativar algoritmo de Nagle (TCP)'
-        Categoria     = 'Rede'
-        Risco         = 'Moderado'
-        Descricao     = 'Desliga o agrupamento de pacotes TCP nas interfaces de rede ativas (TcpAckFrequency=1, TCPNoDelay=1).'
-        Efeito        = 'Reduz latência em jogos que usam TCP (ex.: LoL). Não afeta jogos UDP (CS2, Valorant). Debatível.'
-        RequerAdmin   = $true
+        Alvos     = @(
+            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'; Name = 'NetworkThrottlingIndex'; Valor = -1; Tipo = 'DWord' }  # 0xFFFFFFFF = desativado
+            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile'; Name = 'SystemResponsiveness'; Valor = 10; Tipo = 'DWord' }     # padrão é 20
+        )
+    })
+    (New-Tweak @{
+        Id        = 'Nagle'
+        Nome      = 'Desativar algoritmo de Nagle (TCP)'
+        Categoria = 'Rede'
+        Risco     = 'Moderado'
+        Descricao = 'Desliga o agrupamento de pacotes TCP nas interfaces de rede ativas (TcpAckFrequency=1, TCPNoDelay=1).'
+        Efeito    = 'Reduz latência em jogos que usam TCP (ex.: LoL). Não afeta jogos UDP (CS2, Valorant). Debatível.'
+        RequerAdmin = $true
         RequerReinicio = $true
+        DetalhesTexto = @('Em cada interface de rede com IP ativo: TcpAckFrequency=1, TCPNoDelay=1 (originais salvos no backup)')
         Apply = {
             $root = 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces'
             $touched = 0
@@ -368,47 +361,65 @@ $script:Tweaks = @(
             }
             $applied
         }
-    }
-    [pscustomobject]@{
-        Id            = 'PowerThrottle'
-        Nome          = 'Desativar Power Throttling'
-        Categoria     = 'Energia'
-        Risco         = 'Moderado'
-        Descricao     = 'Impede o Windows de reduzir o clock de processos que ele considera "em segundo plano".'
-        Efeito        = 'Evita que overlays, anti-cheat e apps auxiliares percam desempenho. Aumenta consumo de energia.'
-        RequerAdmin   = $true
+    })
+    (New-Tweak @{
+        Id        = 'PowerThrottle'
+        Nome      = 'Desativar Power Throttling'
+        Categoria = 'Energia'
+        Risco     = 'Moderado'
+        Descricao = 'Impede o Windows de reduzir o clock de processos que ele considera "em segundo plano".'
+        Efeito    = 'Evita que overlays, anti-cheat e apps auxiliares percam desempenho. Aumenta consumo de energia.'
+        RequerAdmin = $true
         RequerReinicio = $true
-        Apply = {
-            Set-RegValueBacked -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling' -Name 'PowerThrottlingOff' -Value 1 -Type DWord
+        Alvos     = @(
+            @{ Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling'; Name = 'PowerThrottlingOff'; Valor = 1; Tipo = 'DWord' }
+        )
+    })
+    (New-Tweak @{
+        Id        = 'WindowedOpt'
+        Nome      = 'Otimizações para jogos em janela'
+        Categoria = 'GPU'
+        Risco     = 'Seguro'
+        Descricao = 'Liga as "Otimizações para jogos em janela" do Windows 11 (modelo de apresentação moderno para janela/borderless).'
+        Efeito    = 'Menor latência para quem joga em janela sem borda. Recurso oficial da Microsoft.'
+        Alvos     = @(
+            @{ Path = 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences'; Name = 'DirectXUserGlobalSettings'; Valor = 'SwapEffectUpgradeEnable=1;'; Tipo = 'String' }
+        )
+        Disponivel = {
+            if ([Environment]::OSVersion.Version.Build -lt 22000) { 'requer Windows 11' } else { $null }
         }
-        Revert = {
-            Restore-RegValueBacked -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling' -Name 'PowerThrottlingOff'
-        }
-        Test = {
-            $a = Get-RegValueInfo -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling' -Name 'PowerThrottlingOff'
-            $a.Existed -and $a.Value -eq 1
-        }
-    }
-    [pscustomobject]@{
-        Id            = 'HAGS'
-        Nome          = 'Agendamento de GPU por hardware (HAGS)'
-        Categoria     = 'GPU'
-        Risco         = 'Avançado'
-        Descricao     = 'Liga o Hardware-Accelerated GPU Scheduling. Requer GPU/driver compatível e REINÍCIO. O ganho varia por hardware — meça antes/depois; em alguns sistemas piora.'
-        Efeito        = 'Pode reduzir latência de frame em GPUs recentes. Resultado depende do driver.'
-        RequerAdmin   = $true
+    })
+    (New-Tweak @{
+        Id        = 'HAGS'
+        Nome      = 'Agendamento de GPU por hardware (HAGS)'
+        Categoria = 'GPU'
+        Risco     = 'Avançado'
+        Descricao = 'Liga o Hardware-Accelerated GPU Scheduling. Requer GPU dedicada com driver compatível e REINÍCIO. O ganho varia por hardware — meça antes/depois; em alguns sistemas piora.'
+        Efeito    = 'Pode reduzir latência de frame em GPUs NVIDIA (GTX 10xx+) e AMD (RX 5000+) recentes.'
+        RequerAdmin = $true
         RequerReinicio = $true
-        Apply = {
-            Set-RegValueBacked -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode' -Value 2 -Type DWord
+        Alvos     = @(
+            @{ Path = 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'; Name = 'HwSchMode'; Valor = 2; Tipo = 'DWord' }
+        )
+        Disponivel = {
+            if ([Environment]::OSVersion.Version.Build -lt 19041) { return 'requer Windows 10 2004 ou superior' }
+            $dgpu = @(Get-GpuInfo | Where-Object { $_.Vendor -in 'NVIDIA', 'AMD' -and -not $_.Integrada })
+            if ($dgpu.Count -eq 0) { 'requer GPU dedicada NVIDIA/AMD (sem suporte confiável em GPU integrada)' } else { $null }
         }
-        Revert = {
-            Restore-RegValueBacked -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode'
-        }
-        Test = {
-            $a = Get-RegValueInfo -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' -Name 'HwSchMode'
-            $a.Existed -and $a.Value -eq 2
-        }
-    }
+    })
+    (New-Tweak @{
+        Id        = 'MPO'
+        Nome      = 'Desativar Multi-Plane Overlay (MPO)'
+        Categoria = 'GPU'
+        Risco     = 'Avançado'
+        Descricao = 'Desliga o MPO do compositor do Windows. Correção conhecida (recomendada pela própria NVIDIA em KB) para stutter, flicker e tela preta com G-Sync/FreeSync e overlays. Se você NÃO tem esses sintomas, não aplique.'
+        Efeito    = 'Elimina stutter/flicker causado por MPO em setups NVIDIA e AMD afetados.'
+        RequerAdmin = $true
+        RequerReinicio = $true
+        Alvos     = @(
+            @{ Path = 'HKLM:\SOFTWARE\Microsoft\Windows\Dwm'; Name = 'OverlayTestMode'; Valor = 5; Tipo = 'DWord' }
+        )
+    })
 )
 
 # ---------------------------------------------------------------------------
@@ -424,17 +435,57 @@ function Get-TweakById {
     $t
 }
 
+function Get-TweakUnavailableReason {
+    # $null = disponível; string = motivo de não se aplicar a esta máquina
+    param([Parameter(Mandatory)]$Tweak)
+    if ($Tweak.Disponivel) {
+        try { return (& $Tweak.Disponivel) } catch { return $null }
+    }
+    $null
+}
+
+function Get-TweakDetail {
+    # Linhas "chave: valor atual → valor novo" para a tela de transparência
+    param([Parameter(Mandatory)]$Tweak)
+    $lines = @()
+    if ($Tweak.DetalhesTexto) { $lines += $Tweak.DetalhesTexto }
+    if ($Tweak.Alvos) {
+        foreach ($a in $Tweak.Alvos) {
+            $cur = Get-RegValueInfo -Path $a.Path -Name $a.Name
+            $curTxt = if ($cur.Existed) { "$($cur.Value)" } else { '(ausente)' }
+            $shortPath = $a.Path -replace '^Microsoft\.PowerShell\.Core\\Registry::', ''
+            $lines += "$shortPath\$($a.Name):  $curTxt  →  $($a.Valor)"
+        }
+    }
+    $lines
+}
+
 function Test-TweakApplied {
     param([Parameter(Mandatory)]$Tweak)
-    try { [bool](& $Tweak.Test) } catch { $false }
+    try {
+        if ($Tweak.Test) { return [bool](& $Tweak.Test) }
+        foreach ($a in $Tweak.Alvos) {
+            $cur = Get-RegValueInfo -Path $a.Path -Name $a.Name
+            if (-not $cur.Existed -or "$($cur.Value)" -ne "$($a.Valor)") { return $false }
+        }
+        return $true
+    } catch { return $false }
 }
 
 function Invoke-Tweak {
     param([Parameter(Mandatory)]$Tweak)
+    $reason = Get-TweakUnavailableReason -Tweak $Tweak
+    if ($reason) { throw "'$($Tweak.Id)' indisponível nesta máquina: $reason" }
     if ($Tweak.RequerAdmin -and -not (Test-IsAdmin)) {
         throw "'$($Tweak.Id)' precisa de PowerShell como Administrador."
     }
-    & $Tweak.Apply
+    if ($Tweak.Apply) {
+        & $Tweak.Apply
+    } else {
+        foreach ($a in $Tweak.Alvos) {
+            Set-RegValueBacked -Path $a.Path -Name $a.Name -Value $a.Valor -Type $a.Tipo
+        }
+    }
     Write-OptLog "APLICADO: $($Tweak.Id) — $($Tweak.Nome)"
 }
 
@@ -443,7 +494,13 @@ function Undo-Tweak {
     if ($Tweak.RequerAdmin -and -not (Test-IsAdmin)) {
         throw "'$($Tweak.Id)' precisa de PowerShell como Administrador para reverter."
     }
-    & $Tweak.Revert
+    if ($Tweak.Revert) {
+        & $Tweak.Revert
+    } else {
+        foreach ($a in $Tweak.Alvos) {
+            Restore-RegValueBacked -Path $a.Path -Name $a.Name
+        }
+    }
     Write-OptLog "REVERTIDO: $($Tweak.Id) — $($Tweak.Nome)"
 }
 

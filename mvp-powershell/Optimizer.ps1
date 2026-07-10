@@ -45,6 +45,7 @@ switch ($Command) {
             @{ L = 'Admin';     E = { if ($_.RequerAdmin) { 'sim' } else { '' } } }
             @{ L = 'Reinício';  E = { if ($_.RequerReinicio) { 'sim' } else { '' } } }
             @{ L = 'Nome';      E = { $_.Nome } }
+            @{ L = 'Obs';       E = { $r = Get-TweakUnavailableReason $_; if ($r) { "indisponível: $r" } else { '' } } }
         )
     }
 
@@ -55,6 +56,10 @@ switch ($Command) {
             @{ L = 'Risco';    E = { $_.Risco } }
             @{ L = 'Nome';     E = { $_.Nome } }
         )
+        foreach ($g in @(Get-GpuInfo)) {
+            $tipo = if ($g.Integrada) { 'integrada' } else { 'dedicada' }
+            Write-Host "GPU:    $($g.Name) [$($g.Vendor) · $tipo · driver $($g.Driver)]"
+        }
         Write-Host "Backup: $script:BackupFile ($($script:Backup.Count) entrada(s))"
         Write-Host "Log:    $script:LogFile"
     }
