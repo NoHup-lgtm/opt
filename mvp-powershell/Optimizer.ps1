@@ -12,7 +12,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('list', 'status', 'apply', 'revert', 'revert-all', 'log')]
+    [ValidateSet('list', 'status', 'apply', 'revert', 'revert-all', 'log', 'diag')]
     [string]$Command = 'list',
 
     [Parameter(Position = 1)]
@@ -69,47 +69,66 @@ switch ($Command) {
         Write-Host "Aplicando $($targets.Count) tweak(s)..." -ForegroundColor Cyan
 
         if (-not $SkipRestorePoint) {
-            if (Test-IsAdmin) {
+            if (-not (Test-IsAdmin)) {
+                Write-Warning 'Sem admin: não dá para criar ponto de restauração. Rode como Administrador ou use -SkipRestorePoint para silenciar.'
+            } elseif (-not (Test-SystemRestoreEnabled)) {
+                # Regra 2: ponto de restauração antes de aplicar. Se o System Restore
+                # está desligado, parar e explicar — nada de falhar em silêncio.
+                Write-Host 'O System Restore está DESATIVADO neste PC — impossível criar o ponto de restauração.' -ForegroundColor Red
+                Write-Host 'Ative com (como admin):  Enable-ComputerRestore -Drive "C:\"'
+                Write-Host 'Ou rode de novo com -SkipRestorePoint para aplicar só com o backup JSON.'
+                exit 1
+            } else {
                 Write-Host 'Criando ponto de restauração (pode demorar ~30s)...'
                 if (-not (New-OptimizerRestorePoint)) {
                     Write-Warning 'Ponto de restauração falhou (o backup JSON continua garantindo o revert).'
                 }
-            } else {
-                Write-Warning 'Sem admin: não dá para criar ponto de restauração. Rode como Administrador ou use -SkipRestorePoint para silenciar.'
             }
         }
 
-        $reboot = $false
-        foreach ($t in $targets) {
-            try {
-                Invoke-Tweak -Tweak $t
-                Write-Host "  [ok] $($t.Id) — $($t.Nome)" -ForegroundColor Green
-                if ($t.RequerReinicio) { $reboot = $true }
-            } catch {
-                Write-Host "  [erro] $($t.Id): $($_.Exception.Message)" -ForegroundColor Red
-                Write-OptLog "Falha aplicando $($t.Id): $_" 'ERROR'
+        Enter-OptimizerLock
+        try {
+            $reboot = $false
+            foreach ($t in $targets) {
+                try {
+                    Invoke-Tweak -Tweak $t
+                    Write-Host "  [ok] $($t.Id) — $($t.Nome) (verificado)" -ForegroundColor Green
+                    if ($t.RequerReinicio) { $reboot = $true }
+                } catch {
+                    Write-Host "  [erro] $($t.Id): $($_.Exception.Message)" -ForegroundColor Red
+                    Write-OptLog "Falha aplicando $($t.Id): $_" 'ERROR'
+                }
             }
-        }
-        if ($reboot) { Write-Host 'Alguns tweaks só valem após REINICIAR o PC.' -ForegroundColor Yellow }
+            if ($reboot) { Write-Host 'Alguns tweaks só valem após REINICIAR o PC.' -ForegroundColor Yellow }
+        } finally { Exit-OptimizerLock }
     }
 
     'revert' {
         $targets = Resolve-Targets
-        foreach ($t in $targets) {
-            try {
-                Undo-Tweak -Tweak $t
-                Write-Host "  [ok] revertido $($t.Id)" -ForegroundColor Green
-            } catch {
-                Write-Host "  [erro] $($t.Id): $($_.Exception.Message)" -ForegroundColor Red
-                Write-OptLog "Falha revertendo $($t.Id): $_" 'ERROR'
+        Enter-OptimizerLock
+        try {
+            foreach ($t in $targets) {
+                try {
+                    Undo-Tweak -Tweak $t
+                    Write-Host "  [ok] revertido $($t.Id)" -ForegroundColor Green
+                } catch {
+                    Write-Host "  [erro] $($t.Id): $($_.Exception.Message)" -ForegroundColor Red
+                    Write-OptLog "Falha revertendo $($t.Id): $_" 'ERROR'
+                }
             }
-        }
+        } finally { Exit-OptimizerLock }
     }
 
     'revert-all' {
         Write-Host 'Desfazendo tudo...' -ForegroundColor Cyan
-        Undo-AllTweaks
+        Enter-OptimizerLock
+        try { Undo-AllTweaks } finally { Exit-OptimizerLock }
         Write-Host 'Concluído. Confira com: .\Optimizer.ps1 status'
+    }
+
+    'diag' {
+        $zip = Export-OptimizerDiagnostic
+        Write-Host "Diagnóstico exportado: $zip"
     }
 
     'log' {

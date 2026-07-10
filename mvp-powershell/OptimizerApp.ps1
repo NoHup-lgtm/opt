@@ -151,8 +151,12 @@ $xaml = @"
     <!-- Log (transparência total: tudo que o app faz aparece aqui e no arquivo) -->
     <Border Grid.Row="5" Background="$($Tok.Surface)" BorderBrush="$($Tok.Line)" BorderThickness="1" CornerRadius="8" Padding="8">
       <DockPanel>
-        <TextBlock DockPanel.Dock="Top" FontFamily="Consolas" FontSize="10" Foreground="$($Tok.Dim)" Margin="4,0,4,4"
-                   Text="log — tudo que o app altera é registrado em %LOCALAPPDATA%\Optimizer\optimizer.log e é reversível"/>
+        <DockPanel DockPanel.Dock="Top" Margin="4,0,4,4">
+          <TextBlock DockPanel.Dock="Left" FontFamily="Consolas" FontSize="10" Foreground="$($Tok.Dim)"
+                     Text="log — tudo que o app altera é registrado em %LOCALAPPDATA%\Optimizer\optimizer.log e é reversível"/>
+          <TextBlock x:Name="DiagLink" HorizontalAlignment="Right" FontFamily="Consolas" FontSize="10"
+                     Foreground="$($Tok.Cold)" Cursor="Hand" Text="[ exportar diagnóstico ]"/>
+        </DockPanel>
         <TextBox x:Name="LogBox" IsReadOnly="True" TextWrapping="NoWrap" FontFamily="Consolas" FontSize="11"
                  Background="Transparent" Foreground="$($Tok.Mute)" BorderThickness="0"
                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
@@ -166,7 +170,7 @@ $window = [Windows.Markup.XamlReader]::Parse($xaml)
 
 $script:Ui = @{}
 foreach ($name in 'GpuBadge','AdminBadge','TweaksPanel','RestoreChk','ApplyBtn','RevertBtn','RevertAllBtn','OptimizeBtn',
-                  'LogBox','Banner','BannerText','Busy','BusyText',
+                  'LogBox','DiagLink','Banner','BannerText','Busy','BusyText',
                   'FpsVal','FpsSub','LowVal','LowSub','PingVal','PingSub','TempVal','TempSub') {
     $script:Ui[$name] = $window.FindName($name)
 }
@@ -359,32 +363,40 @@ function Start-EngineJob {
         Invoke-Expression $coreText
         Initialize-Optimizer
         $result = @{ ok = 0; fail = 0; reboot = $false }
-        if ($rp) {
-            Write-OptLog 'Criando ponto de restauração (pode demorar ~30s)...'
-            New-OptimizerRestorePoint | Out-Null
-        }
-        switch ($action) {
-            'apply' {
-                foreach ($id in $ids) {
-                    $t = Get-TweakById -Id $id
-                    try {
-                        Invoke-Tweak -Tweak $t
-                        $result.ok++
-                        if ($t.RequerReinicio) { $result.reboot = $true }
-                    } catch {
-                        $result.fail++
-                        Write-OptLog "Falha aplicando ${id}: $($_.Exception.Message)" 'ERROR'
+        try {
+            Enter-OptimizerLock   # impede outra instância (CLI/GUI) de escrever junto
+            if ($rp) {
+                Write-OptLog 'Criando ponto de restauração (pode demorar ~30s)...'
+                New-OptimizerRestorePoint | Out-Null
+            }
+            switch ($action) {
+                'apply' {
+                    foreach ($id in $ids) {
+                        $t = Get-TweakById -Id $id
+                        try {
+                            Invoke-Tweak -Tweak $t
+                            $result.ok++
+                            if ($t.RequerReinicio) { $result.reboot = $true }
+                        } catch {
+                            $result.fail++
+                            Write-OptLog "Falha aplicando ${id}: $($_.Exception.Message)" 'ERROR'
+                        }
                     }
                 }
-            }
-            'revert' {
-                foreach ($id in $ids) {
-                    $t = Get-TweakById -Id $id
-                    try { Undo-Tweak -Tweak $t; $result.ok++ }
-                    catch { $result.fail++; Write-OptLog "Falha revertendo ${id}: $($_.Exception.Message)" 'ERROR' }
+                'revert' {
+                    foreach ($id in $ids) {
+                        $t = Get-TweakById -Id $id
+                        try { Undo-Tweak -Tweak $t; $result.ok++ }
+                        catch { $result.fail++; Write-OptLog "Falha revertendo ${id}: $($_.Exception.Message)" 'ERROR' }
+                    }
                 }
+                'revert-all' { Undo-AllTweaks; $result.ok = 1 }
             }
-            'revert-all' { Undo-AllTweaks; $result.ok = 1 }
+        } catch {
+            $result.fail++
+            Write-OptLog "ERRO na operação: $($_.Exception.Message)" 'ERROR'
+        } finally {
+            Exit-OptimizerLock
         }
         $result
     }).AddArgument($script:CoreText).AddArgument($Action).AddArgument($Ids).AddArgument($RestorePoint)
@@ -405,7 +417,7 @@ function Complete-EngineJob {
     if (-not $r) { Show-Banner 'operação terminou sem resultado — ver log' $Tok.Risk; return }
     switch ($action) {
         'apply' {
-            $msg = "✓ $($r.ok) tweak(s) aplicado(s)"
+            $msg = "✓ $($r.ok) tweak(s) aplicado(s) e verificado(s)"
             if ($r.fail -gt 0) { $msg += " · $($r.fail) falhou(aram) — ver log" }
             if ($r.reboot)     { $msg += ' · reinicie o PC para todos valerem' }
             Show-Banner $msg $(if ($r.fail -gt 0) { $Tok.Risk } else { $Tok.Gain })
@@ -491,18 +503,55 @@ function Get-SelectedIds {
     @(Get-Tweaks | Where-Object { -not $script:Rows[$_.Id].Reason -and $script:Rows[$_.Id].Check.IsChecked } | ForEach-Object { $_.Id })
 }
 
+# Regra 2: ponto de restauração antes de aplicar. Se o System Restore está
+# desligado (comum em PC de fábrica), perguntar em vez de falhar em silêncio.
+# Retorna $true/$false (criar ponto?) ou $null (usuário cancelou).
+function Resolve-RestorePointChoice {
+    if (-not $script:Ui.RestoreChk.IsChecked) { return $false }
+    if (Test-SystemRestoreEnabled) { return $true }
+    $ans = [Windows.MessageBox]::Show(
+        "O System Restore está DESATIVADO neste PC — sem ele não dá para criar o ponto de restauração.`n`nSim — ativar o System Restore agora e continuar`nNão — continuar só com o backup JSON do app`nCancelar — não aplicar nada",
+        'Optimizer — ponto de restauração',
+        [Windows.MessageBoxButton]::YesNoCancel,
+        [Windows.MessageBoxImage]::Warning)
+    switch ($ans) {
+        'Yes' {
+            try { Enable-SystemRestoreOnSystemDrive; return $true }
+            catch {
+                Show-Banner "não consegui ativar o System Restore: $($_.Exception.Message)" $Tok.Risk
+                return $null
+            }
+        }
+        'No'    { return $false }
+        default { return $null }
+    }
+}
+
 # Um clique: aplica todo o preset Seguro+Moderado disponível nesta máquina.
 # Avançado NUNCA entra em lote (regra 5) — só via seleção manual.
 $script:Ui.OptimizeBtn.Add_Click({
+    $rp = Resolve-RestorePointChoice
+    if ($null -eq $rp) { return }
     $ids = @(Get-Tweaks | Where-Object { $_.Risco -ne 'Avançado' -and -not $script:Rows[$_.Id].Reason } | ForEach-Object { $_.Id })
     Write-OptLog "OTIMIZAR (um clique): preset Seguro+Moderado — $($ids -join ', ')"
-    Start-EngineJob -Action 'apply' -Ids $ids -RestorePoint ([bool]$script:Ui.RestoreChk.IsChecked)
+    Start-EngineJob -Action 'apply' -Ids $ids -RestorePoint $rp
 })
 
 $script:Ui.ApplyBtn.Add_Click({
     $ids = Get-SelectedIds
     if ($ids.Count -eq 0) { Show-Banner 'nada selecionado' $Tok.Mute; return }
-    Start-EngineJob -Action 'apply' -Ids $ids -RestorePoint ([bool]$script:Ui.RestoreChk.IsChecked)
+    $rp = Resolve-RestorePointChoice
+    if ($null -eq $rp) { return }
+    Start-EngineJob -Action 'apply' -Ids $ids -RestorePoint $rp
+})
+
+$script:Ui.DiagLink.Add_MouseLeftButtonUp({
+    try {
+        $zip = Export-OptimizerDiagnostic
+        Show-Banner "✓ diagnóstico salvo em: $zip (nada é enviado — você decide se manda)" $Tok.Cold
+    } catch {
+        Show-Banner "falha exportando diagnóstico: $($_.Exception.Message)" $Tok.Risk
+    }
 })
 
 $script:Ui.RevertBtn.Add_Click({

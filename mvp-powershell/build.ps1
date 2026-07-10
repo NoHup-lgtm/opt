@@ -26,7 +26,23 @@ if (Get-Command Invoke-PS2EXE -ErrorAction SilentlyContinue) {
     $exePath = Join-Path $dist 'Optimizer.exe'
     Invoke-PS2EXE -InputFile $mergedPath -OutputFile $exePath -NoConsole -RequireAdmin -Title 'Optimizer' -STA
     Write-Host "Gerado: $exePath"
-    Write-Host 'Lembrete: para distribuir, assinar o .exe com certificado de code signing (regra 7 do CLAUDE.md).'
+
+    # Assinatura (regra 7): defina OPT_CODESIGN_THUMBPRINT com o thumbprint do
+    # certificado de code signing instalado em Cert:\CurrentUser\My.
+    if ($env:OPT_CODESIGN_THUMBPRINT) {
+        $cert = Get-Item "Cert:\CurrentUser\My\$($env:OPT_CODESIGN_THUMBPRINT)"
+        $sig = Set-AuthenticodeSignature -FilePath $exePath -Certificate $cert `
+            -TimestampServer 'http://timestamp.digicert.com' -HashAlgorithm SHA256
+        if ($sig.Status -ne 'Valid') { throw "Assinatura falhou: $($sig.StatusMessage)" }
+        Write-Host "Assinado: $($cert.Subject)"
+    } else {
+        Write-Warning 'EXE NÃO ASSINADO — sem assinatura o SmartScreen/Defender vai bloquear na máquina do cliente. Ver docs/distribuicao.md.'
+    }
+
+    # Hash para publicar junto do download (o cliente confere a integridade)
+    $hash = (Get-FileHash $exePath -Algorithm SHA256).Hash
+    Set-Content -Path "$exePath.sha256.txt" -Value $hash -Encoding ASCII
+    Write-Host "SHA256: $hash"
 } else {
     Write-Warning 'Módulo ps2exe não encontrado — só o .ps1 mesclado foi gerado. Instale com: Install-Module ps2exe -Scope CurrentUser'
 }

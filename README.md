@@ -23,10 +23,26 @@ CLI:
 
 ## Garantias
 
-- Antes de qualquer mudança, o valor original vai para `%LOCALAPPDATA%\Optimizer\backup.json`.
-- Todo apply tenta criar um ponto de restauração do Windows primeiro.
+- Antes de qualquer mudança, o valor original vai para `%LOCALAPPDATA%\Optimizer\backup.json` (escrita atômica — crash não corrompe).
+- Todo apply cria um ponto de restauração do Windows antes — e se o System Restore estiver desligado, o app avisa e pergunta em vez de falhar em silêncio.
+- Cada tweak é **verificado depois de aplicado**: se GPO/antivírus rejeitou o valor, o app reporta falha em vez de sucesso falso.
+- Uma trava entre instâncias impede CLI e painel de escreverem no backup ao mesmo tempo.
 - Tudo que o app faz fica em `%LOCALAPPDATA%\Optimizer\optimizer.log`.
 - `revert-all` / botão "DESFAZER TUDO" restaura cada valor ao estado original.
+
+## Testes
+
+```powershell
+.\tests\run-tests.ps1                          # testes do motor (seguros, não aplicam nada real)
+.\tests\vm-roundtrip.ps1 -EuSeiQueEstouNumaVM  # SÓ EM VM: aplica tudo, reverte tudo, faz diff
+```
+
+O CI (GitHub Actions, `windows-latest`) roda parse + testes + build a cada push.
+
+## Suporte
+
+Painel → "[ exportar diagnóstico ]" (ou `.\mvp-powershell\Optimizer.ps1 diag`) gera um .zip
+local com log, backup e estado do sistema. Nada é enviado automaticamente.
 
 ## Gerar .exe
 

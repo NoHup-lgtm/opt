@@ -13,7 +13,10 @@ Jogos NÃO são fixos no código. Valorant, CS2, GTA RP/FiveM e Warzone são só
 - `mvp-powershell/OptimizerCore.ps1` — motor compartilhado: catálogo de tweaks, camada de backup (JSON), log e restore point. CLI e GUI carregam este arquivo.  
 - `mvp-powershell/OptimizerApp.ps1` — MVP funcional: app WPF em PowerShell, roda direto no Windows, faz as otimizações de verdade (registro, powercfg), com apply/revert e ponto de restauração. Vira .exe com ps2exe (`build.ps1`). É o que está sendo validado com usuários.  
 - `mvp-powershell/Optimizer.ps1` — motor de otimização em linha de comando (mesmo catálogo).  
-- `docs/tweaks.md` — cada tweak documentado com fonte e risco (convenção obrigatória).
+- `docs/tweaks.md` — cada tweak documentado com fonte e risco (convenção obrigatória).  
+- `tests/run-tests.ps1` — testes do motor (sem tocar em config real; rodam no CI a cada push).  
+- `tests/vm-roundtrip.ps1` — prova de apply→revert completo; rodar em VM descartável antes de release.  
+- `docs/distribuicao.md` — plano de code signing e mitigação de antivírus/SmartScreen.
 
 ## Direção de arquitetura
 

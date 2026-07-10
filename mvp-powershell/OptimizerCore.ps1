@@ -11,6 +11,7 @@ $script:LogFile    = Join-Path $script:DataDir 'optimizer.log'
 $script:LogSink    = $null   # scriptblock opcional — espelha o log em outra saída
 $script:Backup     = @{}
 $script:GpuCache   = $null
+$script:Mutex      = $null
 
 # ---------------------------------------------------------------------------
 # Infraestrutura: log e backup
@@ -42,11 +43,13 @@ function Initialize-Optimizer {
 }
 
 function Save-OptimizerBackup {
-    if ($script:Backup.Count -eq 0) {
-        Set-Content -Path $script:BackupFile -Value '{}' -Encoding UTF8
-    } else {
-        $script:Backup | ConvertTo-Json -Depth 6 | Set-Content -Path $script:BackupFile -Encoding UTF8
-    }
+    # Escrita atômica: grava em .tmp e renomeia por cima (rename é atômico no NTFS).
+    # Um crash no meio da gravação nunca pode corromper o backup — ele é a única
+    # garantia de revert.
+    $json = if ($script:Backup.Count -eq 0) { '{}' } else { $script:Backup | ConvertTo-Json -Depth 6 }
+    $tmp = "$script:BackupFile.tmp"
+    [IO.File]::WriteAllText($tmp, $json, (New-Object Text.UTF8Encoding $true))
+    Move-Item -Path $tmp -Destination $script:BackupFile -Force
 }
 
 function Test-IsAdmin {
@@ -65,6 +68,54 @@ function New-OptimizerRestorePoint {
         Write-OptLog "Não foi possível criar ponto de restauração: $($_.Exception.Message)" 'WARN'
         return $false
     }
+}
+
+# ---------------------------------------------------------------------------
+# Trava entre instâncias — CLI e GUI rodando juntos não podem escrever no
+# backup ao mesmo tempo. Cross-process via mutex nomeado.
+# ---------------------------------------------------------------------------
+
+function Enter-OptimizerLock {
+    param([int]$TimeoutMs = 5000)
+    if ($script:Mutex) { return }   # esta instância já detém a trava
+    $m = $null
+    try { $m = New-Object Threading.Mutex($false, 'Global\OptimizerEngineLock') }
+    catch { $m = New-Object Threading.Mutex($false, 'Local\OptimizerEngineLock') }
+    $got = $false
+    try { $got = $m.WaitOne($TimeoutMs) }
+    catch [Threading.AbandonedMutexException] { $got = $true }   # o dono anterior morreu — a trava é nossa
+    if (-not $got) {
+        $m.Dispose()
+        throw 'Outra instância do Optimizer está aplicando alterações agora. Aguarde ela terminar e tente de novo.'
+    }
+    $script:Mutex = $m
+}
+
+function Exit-OptimizerLock {
+    if ($script:Mutex) {
+        try { $script:Mutex.ReleaseMutex() } catch { }
+        $script:Mutex.Dispose()
+        $script:Mutex = $null
+    }
+}
+
+# ---------------------------------------------------------------------------
+# System Restore — a regra 2 exige ponto de restauração antes de aplicar,
+# mas muitos PCs vêm com o System Restore desligado de fábrica. Detectar
+# ANTES de aplicar, em vez de deixar o Checkpoint-Computer falhar em silêncio.
+# ---------------------------------------------------------------------------
+
+function Test-SystemRestoreEnabled {
+    # GPO pode desabilitar (DisableSR=1); fora isso, RPSessionInterval>=1 indica ativo.
+    $gpo = Get-RegValueInfo -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\SystemRestore' -Name 'DisableSR'
+    if ($gpo.Existed -and $gpo.Value -eq 1) { return $false }
+    $sr = Get-RegValueInfo -Path 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' -Name 'RPSessionInterval'
+    return [bool]($sr.Existed -and $sr.Value -ge 1)
+}
+
+function Enable-SystemRestoreOnSystemDrive {
+    Enable-ComputerRestore -Drive "$env:SystemDrive\"
+    Write-OptLog "System Restore ativado em $env:SystemDrive\"
 }
 
 # ---------------------------------------------------------------------------
@@ -342,6 +393,7 @@ $script:Tweaks = @(
                     $touched++
                 }
             }
+            if ($touched -eq 0) { throw 'nenhuma interface de rede com IP ativo encontrada' }
             Write-OptLog "Nagle desativado em $touched interface(s) com IP ativo"
         }
         Revert = {
@@ -486,7 +538,12 @@ function Invoke-Tweak {
             Set-RegValueBacked -Path $a.Path -Name $a.Name -Value $a.Valor -Type $a.Tipo
         }
     }
-    Write-OptLog "APLICADO: $($Tweak.Id) — $($Tweak.Nome)"
+    # Verificação pós-apply: escrever sem erro não basta — GPO, Tamper Protection
+    # ou o driver podem rejeitar/reverter o valor silenciosamente.
+    if (-not (Test-TweakApplied -Tweak $Tweak)) {
+        throw "'$($Tweak.Id)' foi escrito mas o sistema não confirmou o novo valor (GPO ou antivírus podem ter bloqueado)."
+    }
+    Write-OptLog "APLICADO e verificado: $($Tweak.Id) — $($Tweak.Nome)"
 }
 
 function Undo-Tweak {
@@ -516,4 +573,53 @@ function Undo-AllTweaks {
         }
     }
     Write-OptLog 'DESFAZER TUDO concluído.'
+}
+
+# ---------------------------------------------------------------------------
+# Diagnóstico exportável (suporte na validação com usuários)
+# ---------------------------------------------------------------------------
+
+function Export-OptimizerDiagnostic {
+    # Gera um .zip local com log, backup e estado do sistema. NADA é enviado
+    # automaticamente — o usuário decide se manda o arquivo.
+    param([string]$OutDir = [Environment]::GetFolderPath('Desktop'))
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $work = Join-Path $env:TEMP "opt-diag-$stamp"
+    New-Item -ItemType Directory -Path $work -Force | Out-Null
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem
+        $lines = @(
+            "Optimizer — diagnóstico $stamp"
+            "OS: $($os.Caption) build $($os.BuildNumber)"
+            "PowerShell: $($PSVersionTable.PSVersion)"
+            "Admin: $(Test-IsAdmin)"
+            "System Restore ativo: $(Test-SystemRestoreEnabled)"
+            "Plano de energia ativo: $(Get-ActivePowerScheme)"
+            ''
+            'GPUs:'
+        )
+        foreach ($g in @(Get-GpuInfo)) {
+            $tipo = if ($g.Integrada) { 'integrada' } else { 'dedicada' }
+            $lines += "  $($g.Name) [$($g.Vendor) · $tipo · driver $($g.Driver)]"
+        }
+        $lines += ''
+        $lines += 'Tweaks:'
+        foreach ($t in Get-Tweaks) {
+            $st = if (Test-TweakApplied $t) { 'APLICADO' } else { '-' }
+            $reason = Get-TweakUnavailableReason -Tweak $t
+            if ($reason) { $st = "indisponível: $reason" }
+            $lines += ('  {0,-14} {1,-9} {2}' -f $t.Id, $t.Risco, $st)
+        }
+        Set-Content -Path (Join-Path $work 'info.txt') -Value $lines -Encoding UTF8
+        if (Test-Path $script:BackupFile) { Copy-Item $script:BackupFile (Join-Path $work 'backup.json') }
+        if (Test-Path $script:LogFile) {
+            Get-Content $script:LogFile -Tail 500 | Set-Content (Join-Path $work 'optimizer.log.txt') -Encoding UTF8
+        }
+        $zip = Join-Path $OutDir "Optimizer-diagnostico-$stamp.zip"
+        Compress-Archive -Path (Join-Path $work '*') -DestinationPath $zip -Force
+        Write-OptLog "Diagnóstico exportado: $zip"
+        return $zip
+    } finally {
+        Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }

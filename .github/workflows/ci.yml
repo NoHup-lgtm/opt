@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Windows PowerShell 5.1 (shell: powershell) — mesmo runtime do produto
+      - name: Parse check
+        shell: powershell
+        run: |
+          $errs = @()
+          foreach ($f in (Get-ChildItem mvp-powershell\*.ps1, tests\*.ps1)) {
+            $tokens = $null; $pe = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$pe) | Out-Null
+            if ($pe.Count -gt 0) { $errs += "$($f.Name): $($pe[0].Message) (linha $($pe[0].Extent.StartLineNumber))" }
+            else { Write-Host "parse ok: $($f.Name)" }
+          }
+          if ($errs) { $errs | ForEach-Object { Write-Host $_ -ForegroundColor Red }; exit 1 }
+
+      - name: Run engine tests
+        shell: powershell
+        run: .\tests\run-tests.ps1
+
+      - name: Build merged script
+        shell: powershell
+        run: .\mvp-powershell\build.ps1
