@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\\\\Users\\\\arthu\\\\GitHub\\\\opt\\\\mvp-powershell\\\\Optimizer.ps1' list)",
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\\\\Users\\\\arthu\\\\GitHub\\\\opt\\\\mvp-powershell\\\\Optimizer.ps1' status)",
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -Sta -File 'C:\\\\Users\\\\arthu\\\\GitHub\\\\opt\\\\mvp-powershell\\\\OptimizerApp.ps1' -NoElevate -RenderTest)",
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\\\\Users\\\\arthu\\\\GitHub\\\\opt\\\\mvp-powershell\\\\build.ps1'; $tokens=$null; $pe=$null; [System.Management.Automation.Language.Parser]::ParseFile\\('C:\\\\Users\\\\arthu\\\\GitHub\\\\opt\\\\mvp-powershell\\\\dist\\\\OptimizerApp.merged.ps1', [ref]$tokens, [ref]$pe\\) | Out-Null; if \\($pe.Count -eq 0\\) { Write-Host 'merged parse ok' } else { $pe | ForEach-Object { $_.Message } })",
+      "PowerShell(powershell -NoProfile -ExecutionPolicy Bypass -File 'C:\\\\Users\\\\arthu\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\C--Users-arthu-GitHub-opt\\\\0471fdc6-a0d0-45b4-a1c0-74d9118ef98e\\\\scratchpad\\\\selftest.ps1')",
+      "PowerShell(git init 'C:\\\\Users\\\\arthu\\\\GitHub\\\\opt')"
+    ]
+  }
+}
