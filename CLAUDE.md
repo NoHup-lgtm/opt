@@ -90,11 +90,11 @@ Ações por-jogo também precisam de backup/revert (guardar o .ini/cfg original 
 
 Conceito: **instrumento de diagnóstico de precisão** (telemetria), NÃO "gamer RGB".
 
-- Fundo: `#0C1116` (slate azulado, não preto puro)  
-- Superfície: `#131B22` / `#182229`  · Linhas: `#233039` / `#1B252D`  
-- Texto: `#E6EDF2` (primário) · `#7C8D9A` (mute) · `#556571` (dim)  
-- Acento (ação/ativo): âmbar `#FF9432`  
-- Semânticos: ganho `#4FD98A` · risco `#E85D5D` · frio/temp `#4FC6D9`  
+- Fundo: `#0B0D12` (ink azulado, não preto puro)  
+- Superfície: `#12151D` / `#161A24`  · Linhas: `#232838` / `#1C2130`  
+- Texto: `#EDEEF4` (primário) · `#8A91A8` (mute) · `#565D73` (dim)  
+- Acento (ação/ativo): violeta `#7C6CFF`, em gradiente para azul `#4EA8FF` no CTA e no logo (com glow suave)  
+- Semânticos: ganho `#4ADE97` · risco `#F0566A` · aviso/moderado `#FFB454` · frio/temp `#4EC9E8`  
 - Tipografia: números/telemetria sempre em MONO (Consolas no WPF). Títulos: Segoe UI SemiBold.  
 - Assinatura: readout de telemetria antes→depois no topo (é o argumento de venda).
 

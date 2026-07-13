@@ -49,10 +49,11 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 
 # --- Tokens ----------------------------------------------------------------
 $script:Tok = @{
-    Bg      = '#0C1116'; Surface = '#131B22'; Surface2 = '#182229'
-    Line    = '#233039'; Line2   = '#1B252D'
-    Text    = '#E6EDF2'; Mute    = '#7C8D9A'; Dim = '#556571'
-    Accent  = '#FF9432'; Gain    = '#4FD98A'; Risk = '#E85D5D'; Cold = '#4FC6D9'
+    Bg      = '#0B0D12'; Surface = '#12151D'; Surface2 = '#161A24'
+    Line    = '#232838'; Line2   = '#1C2130'
+    Text    = '#EDEEF4'; Mute    = '#8A91A8'; Dim = '#565D73'
+    Accent  = '#7C6CFF'; Accent2 = '#4EA8FF'; Warn = '#FFB454'
+    Gain    = '#4ADE97'; Risk    = '#F0566A'; Cold = '#4EC9E8'
 }
 
 function New-Brush([string]$Hex) {
@@ -61,7 +62,7 @@ function New-Brush([string]$Hex) {
 
 $script:RiskColor = @{
     'Seguro'   = $Tok.Gain
-    'Moderado' = $Tok.Accent
+    'Moderado' = $Tok.Warn
     'Avançado' = $Tok.Risk
 }
 
@@ -69,12 +70,18 @@ $script:RiskColor = @{
 $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="OPT — otimizador" Width="1160" Height="780"
+        Title="OPT — otimizador" Width="1188" Height="808"
         WindowStartupLocation="CenterScreen" ResizeMode="CanMinimize"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         FontFamily="Segoe UI" TextOptions.TextRenderingMode="ClearType">
 
   <Window.Resources>
+    <!-- gradiente do acento (CTA e logo) -->
+    <LinearGradientBrush x:Key="AccentGrad" StartPoint="0,0" EndPoint="1,1">
+      <GradientStop Color="$($Tok.Accent)" Offset="0"/>
+      <GradientStop Color="$($Tok.Accent2)" Offset="1"/>
+    </LinearGradientBrush>
+
     <!-- toggle estilo switch -->
     <Style x:Key="Switch" TargetType="CheckBox">
       <Setter Property="Cursor" Value="Hand"/>
@@ -157,6 +164,13 @@ $xaml = @"
     </Style>
   </Window.Resources>
 
+  <Grid Margin="14">
+    <!-- sombra da janela (borda separada para não desfocar o conteúdo) -->
+    <Border CornerRadius="16" Background="#000000">
+      <Border.Effect>
+        <DropShadowEffect Color="#000000" BlurRadius="26" ShadowDepth="0" Opacity="0.6"/>
+      </Border.Effect>
+    </Border>
   <Border CornerRadius="14" Background="$($Tok.Bg)" BorderBrush="$($Tok.Line)" BorderThickness="1">
     <Grid>
       <Grid.RowDefinitions>
@@ -167,7 +181,7 @@ $xaml = @"
       <!-- barra de título (arrastável) -->
       <DockPanel Grid.Row="0" x:Name="TitleBar" Background="Transparent" Margin="20,8,10,0">
         <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
-          <TextBlock Text="OPT" FontFamily="Consolas" FontSize="20" FontWeight="Bold" Foreground="$($Tok.Accent)" VerticalAlignment="Center"/>
+          <TextBlock Text="OPT" FontFamily="Consolas" FontSize="20" FontWeight="Bold" Foreground="{StaticResource AccentGrad}" VerticalAlignment="Center"/>
           <TextBlock Text="  otimizador" FontSize="13" Foreground="$($Tok.Mute)" VerticalAlignment="Center"/>
         </StackPanel>
         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
@@ -271,7 +285,11 @@ $xaml = @"
                       Foreground="$($Tok.Mute)"/>
               <Button x:Name="ApplyBtn" Content="APLICAR SELEÇÃO" Style="{StaticResource Pill}" FontFamily="Consolas" FontSize="11" Padding="14,9" Margin="0,0,10,0"/>
               <Button x:Name="OptimizeBtn" Content="⚡ OTIMIZAR" Style="{StaticResource Pill}" FontFamily="Consolas" FontSize="13" FontWeight="Bold" Padding="24,9"
-                      Background="$($Tok.Accent)" BorderBrush="$($Tok.Accent)" Foreground="$($Tok.Bg)"/>
+                      Background="{StaticResource AccentGrad}" BorderBrush="Transparent" Foreground="#FFFFFF">
+                <Button.Effect>
+                  <DropShadowEffect Color="$($Tok.Accent)" BlurRadius="16" ShadowDepth="0" Opacity="0.55"/>
+                </Button.Effect>
+              </Button>
             </StackPanel>
           </DockPanel>
 
@@ -293,6 +311,7 @@ $xaml = @"
       </Grid>
     </Grid>
   </Border>
+  </Grid>
 </Window>
 "@
 
