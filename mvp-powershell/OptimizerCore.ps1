@@ -201,6 +201,129 @@ function Test-GameRunning {
 }
 
 # ---------------------------------------------------------------------------
+# Backup de ARQUIVO (para as ações por jogo que editam .ini/.cfg).
+# Mesma regra do registro: o original é salvo UMA vez, antes da 1ª edição.
+# ---------------------------------------------------------------------------
+
+function Backup-FileOnce {
+    param([Parameter(Mandatory)][string]$Path)
+    $key = "file|$Path"
+    if ($script:Backup.ContainsKey($key)) { return }
+    $dir = Join-Path $script:DataDir 'filebackups'
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $dest = Join-Path $dir ('{0:x8}.{1}' -f [math]::Abs($Path.ToLower().GetHashCode()), [IO.Path]::GetFileName($Path))
+    Copy-Item -Path $Path -Destination $dest -Force
+    $script:Backup[$key] = @{ kind = 'file'; path = $Path; backupPath = $dest; savedAt = (Get-Date).ToString('s') }
+    Save-OptimizerBackup
+    Write-OptLog "BACKUP arquivo $Path -> $dest"
+}
+
+function Restore-FileBacked {
+    param([Parameter(Mandatory)][string]$Path)
+    $key = "file|$Path"
+    if (-not $script:Backup.ContainsKey($key)) { return }
+    $b = $script:Backup[$key]
+    if (Test-Path $b.backupPath) {
+        Copy-Item -Path $b.backupPath -Destination $Path -Force
+        Write-OptLog "RESTORE arquivo $Path"
+    }
+    $script:Backup.Remove($key)
+    Save-OptimizerBackup
+}
+
+function Set-IniValue {
+    # Edita chave=valor num arquivo estilo INI, preservando o resto do conteúdo.
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$Section,
+        [Parameter(Mandatory)][string]$Key,
+        [Parameter(Mandatory)][string]$Value
+    )
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($l in [IO.File]::ReadAllLines($Path)) { $lines.Add($l) }
+    $kv = "$Key=$Value"
+    $keyRe = '^\s*' + [regex]::Escape($Key) + '\s*='
+    if ($Section) {
+        $secRe = '^\s*\[' + [regex]::Escape($Section) + '\]\s*$'
+        $secIdx = -1
+        for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match $secRe) { $secIdx = $i; break } }
+        if ($secIdx -lt 0) {
+            $lines.Add("[$Section]")
+            $lines.Add($kv)
+        } else {
+            $end = $lines.Count
+            for ($i = $secIdx + 1; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^\s*\[') { $end = $i; break } }
+            $found = $false
+            for ($i = $secIdx + 1; $i -lt $end; $i++) { if ($lines[$i] -match $keyRe) { $lines[$i] = $kv; $found = $true; break } }
+            if (-not $found) { $lines.Insert($end, $kv) }
+        }
+    } else {
+        $found = $false
+        for ($i = 0; $i -lt $lines.Count; $i++) { if ($lines[$i] -match $keyRe) { $lines[$i] = $kv; $found = $true; break } }
+        if (-not $found) { $lines.Add($kv) }
+    }
+    [IO.File]::WriteAllLines($Path, $lines)
+    Write-OptLog "INI $Path $(if ($Section) { "[$Section] " })$kv"
+}
+
+# ---------------------------------------------------------------------------
+# Ações por jogo (camada 2 do modelo de dados — vêm do JSON, nunca do código).
+# Tipos suportados:
+#   gpuPref — força o jogo na GPU dedicada (só em máquina híbrida dedicada+integrada)
+#   iniEdit — edita chave em .ini/.cfg do jogo (original vai para o backup de arquivo)
+# Retornam 'ok: ...' ou 'pulado: motivo'; erro real = exception.
+# ---------------------------------------------------------------------------
+
+$script:GpuPrefRegKey = 'HKCU:\Software\Microsoft\DirectX\UserGpuPreferences'
+
+function Invoke-GameAction {
+    param([Parameter(Mandatory)]$Action)
+    switch ("$($Action.tipo)") {
+        'gpuPref' {
+            $gpus = @(Get-GpuInfo)
+            $hybrid = (@($gpus | Where-Object { $_.Integrada }).Count -gt 0) -and
+                      (@($gpus | Where-Object { -not $_.Integrada }).Count -gt 0)
+            if (-not $hybrid) { return 'pulado: PC não tem GPU híbrida (dedicada + integrada) — o Windows já usa a única GPU' }
+            $exe = $null
+            foreach ($c in @($Action.exes)) {
+                $p = [Environment]::ExpandEnvironmentVariables($c)
+                if ($p -and (Test-Path $p)) { $exe = $p; break }
+            }
+            if (-not $exe) { return 'pulado: executável do jogo não encontrado' }
+            Set-RegValueBacked -Path $script:GpuPrefRegKey -Name $exe -Value 'GpuPreference=2;' -Type String
+            return "ok: GPU dedicada forçada para $([IO.Path]::GetFileName($exe))"
+        }
+        'iniEdit' {
+            $file = [Environment]::ExpandEnvironmentVariables($Action.arquivo)
+            if (-not (Test-Path $file)) { return 'pulado: arquivo de config não existe (abra o jogo uma vez antes)' }
+            Backup-FileOnce -Path $file
+            $sec = if ($Action.PSObject.Properties['secao']) { $Action.secao } else { $null }
+            Set-IniValue -Path $file -Section $sec -Key $Action.chave -Value $Action.valor
+            return "ok: $($Action.chave)=$($Action.valor)"
+        }
+        default { return "pulado: tipo de ação desconhecido '$($Action.tipo)'" }
+    }
+}
+
+function Undo-GameActions {
+    param([Parameter(Mandatory)]$Profile)
+    foreach ($a in @($Profile.porJogo)) {
+        switch ("$($a.tipo)") {
+            'gpuPref' {
+                foreach ($c in @($a.exes)) {
+                    $p = [Environment]::ExpandEnvironmentVariables($c)
+                    if ($p) { Restore-RegValueBacked -Path $script:GpuPrefRegKey -Name $p }
+                }
+            }
+            'iniEdit' {
+                Restore-FileBacked -Path ([Environment]::ExpandEnvironmentVariables($a.arquivo))
+            }
+        }
+    }
+    Write-OptLog "Ações por jogo de '$($Profile.id)' revertidas."
+}
+
+# ---------------------------------------------------------------------------
 # Camada de escrita reversível no registro
 # ---------------------------------------------------------------------------
 
@@ -324,25 +447,31 @@ $script:Tweaks = @(
     })
     (New-Tweak @{
         Id        = 'Power'
-        Nome      = 'Plano de energia: Alto Desempenho'
+        Nome      = 'Plano de energia: Ultimate / Alto Desempenho'
         Categoria = 'Energia'
         Risco     = 'Seguro'
-        Descricao = 'Troca o plano de energia ativo para Alto Desempenho (o plano anterior fica salvo no backup).'
-        Efeito    = 'CPU deixa de reduzir clock agressivamente; melhora consistência de frametime.'
-        DetalhesTexto = @('powercfg /setactive → Alto Desempenho (o plano atual fica salvo no backup)')
+        Descricao = 'Cria e ativa o plano Ultimate Performance (oculto pela Microsoft no Windows Home); se não der, cai para Alto Desempenho. O plano anterior fica salvo no backup e o plano criado é apagado no revert.'
+        Efeito    = 'CPU não reduz clock em micro-pausas; melhora consistência de frametime.'
+        DetalhesTexto = @('powercfg -duplicatescheme (Ultimate Performance) + /setactive — plano anterior salvo no backup; o plano criado é apagado no revert')
         Apply = {
             $key = 'powercfg|activescheme'
             if (-not $script:Backup.ContainsKey($key)) {
-                $script:Backup[$key] = @{
-                    kind    = 'powercfg'
-                    value   = (Get-ActivePowerScheme)
-                    savedAt = (Get-Date).ToString('s')
-                }
+                $script:Backup[$key] = @{ kind = 'powercfg'; value = (Get-ActivePowerScheme); savedAt = (Get-Date).ToString('s') }
                 Save-OptimizerBackup
             }
-            powercfg /setactive $script:HighPerfGuid 2>$null
+            $ukey = 'powercfg|ultimatescheme'
+            if (-not $script:Backup.ContainsKey($ukey)) {
+                $out = powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61
+                if ("$out" -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') {
+                    $script:Backup[$ukey] = @{ kind = 'powercfg-created'; value = $Matches[1]; savedAt = (Get-Date).ToString('s') }
+                    Save-OptimizerBackup
+                    Write-OptLog "Plano Ultimate Performance criado: $($Matches[1])"
+                }
+            }
+            $target = if ($script:Backup.ContainsKey($ukey)) { $script:Backup[$ukey].value } else { $script:HighPerfGuid }
+            powercfg /setactive $target
             if ($LASTEXITCODE -ne 0) { powercfg /setactive SCHEME_MIN | Out-Null }
-            Write-OptLog "POWERCFG setactive $script:HighPerfGuid"
+            Write-OptLog "POWERCFG setactive $target"
         }
         Revert = {
             $key = 'powercfg|activescheme'
@@ -355,8 +484,19 @@ $script:Tweaks = @(
                 $script:Backup.Remove($key)
                 Save-OptimizerBackup
             }
+            $ukey = 'powercfg|ultimatescheme'
+            if ($script:Backup.ContainsKey($ukey)) {
+                try { powercfg /delete $script:Backup[$ukey].value | Out-Null } catch { }
+                $script:Backup.Remove($ukey)
+                Save-OptimizerBackup
+                Write-OptLog 'Plano Ultimate criado pelo app foi removido.'
+            }
         }
-        Test = { (Get-ActivePowerScheme) -eq $script:HighPerfGuid }
+        Test = {
+            $active = Get-ActivePowerScheme
+            $ukey = 'powercfg|ultimatescheme'
+            ($active -eq $script:HighPerfGuid) -or ($script:Backup.ContainsKey($ukey) -and $active -eq $script:Backup[$ukey].value)
+        }
     })
     (New-Tweak @{
         Id        = 'MouseAccel'
@@ -369,6 +509,30 @@ $script:Tweaks = @(
             @{ Path = 'HKCU:\Control Panel\Mouse'; Name = 'MouseSpeed'; Valor = '0'; Tipo = 'String' }
             @{ Path = 'HKCU:\Control Panel\Mouse'; Name = 'MouseThreshold1'; Valor = '0'; Tipo = 'String' }
             @{ Path = 'HKCU:\Control Panel\Mouse'; Name = 'MouseThreshold2'; Valor = '0'; Tipo = 'String' }
+        )
+    })
+    (New-Tweak @{
+        Id        = 'Transparency'
+        Nome      = 'Desativar transparência do Windows'
+        Categoria = 'Sistema'
+        Risco     = 'Seguro'
+        Descricao = 'Desliga os efeitos de transparência/acrílico da interface do Windows.'
+        Efeito    = 'Menos trabalho de GPU na interface; ajuda PCs fracos e notebooks. Complementa o VisualFX.'
+        Alvos     = @(
+            @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize'; Name = 'EnableTransparency'; Valor = 0; Tipo = 'DWord' }
+        )
+    })
+    (New-Tweak @{
+        Id        = 'StickyKeys'
+        Nome      = 'Desativar popups de acessibilidade (Shift 5x)'
+        Categoria = 'Entrada'
+        Risco     = 'Seguro'
+        Descricao = 'Desativa os atalhos e popups de Teclas de Aderência, Alternância e Filtragem que roubam o foco no meio da partida. Não afeta FPS.'
+        Efeito    = 'Nunca mais perder uma luta porque o Windows abriu popup de acessibilidade.'
+        Alvos     = @(
+            @{ Path = 'HKCU:\Control Panel\Accessibility\StickyKeys'; Name = 'Flags'; Valor = '506'; Tipo = 'String' }
+            @{ Path = 'HKCU:\Control Panel\Accessibility\ToggleKeys'; Name = 'Flags'; Valor = '58'; Tipo = 'String' }
+            @{ Path = 'HKCU:\Control Panel\Accessibility\Keyboard Response'; Name = 'Flags'; Valor = '122'; Tipo = 'String' }
         )
     })
     (New-Tweak @{
@@ -613,6 +777,8 @@ function Undo-AllTweaks {
         $b = $script:Backup[$key]
         if ($b.kind -eq 'registry') {
             try { Restore-RegValueBacked -Path $b.path -Name $b.name } catch { Write-OptLog "Falha restaurando ${key}: $_" 'ERROR' }
+        } elseif ($b.kind -eq 'file') {
+            try { Restore-FileBacked -Path $b.path } catch { Write-OptLog "Falha restaurando arquivo ${key}: $_" 'ERROR' }
         }
     }
     Write-OptLog 'DESFAZER TUDO concluído.'

@@ -509,7 +509,9 @@ function Select-GameProfile {
         $row.Check.IsChecked = ($sistema -contains $t.Id)
     }
     Write-OptLog "Perfil '$($Profile.nome)' selecionado — tweaks do perfil marcados."
-    Show-Banner "perfil $($Profile.nome): $($sistema.Count) tweaks marcados — revise e aplique" $Tok.Cold
+    $nAcoes = @($Profile.porJogo).Count
+    $extra = if ($nAcoes -gt 0) { " + $nAcoes ação(ões) do jogo no OTIMIZAR" } else { '' }
+    Show-Banner "perfil $($Profile.nome): $($sistema.Count) tweaks marcados$extra — revise e aplique" $Tok.Cold
 }
 
 function Build-GamesPanel {
@@ -620,15 +622,15 @@ function Show-Banner {
 }
 
 function Start-EngineJob {
-    param([string]$Action, [string[]]$Ids, [bool]$RestorePoint)
+    param([string]$Action, [string[]]$Ids, [bool]$RestorePoint, [string]$GameJson = '')
     if ($script:Job) { return }
     Set-Busy $true $(if ($Action -like 'revert*') { 'revertendo...' } else { 'aplicando...' })
     $ps = [powershell]::Create()
     [void]$ps.AddScript({
-        param($coreText, $action, $ids, $rp)
+        param($coreText, $action, $ids, $rp, $gameJson)
         Invoke-Expression $coreText
         Initialize-Optimizer
-        $result = @{ ok = 0; fail = 0; reboot = $false }
+        $result = @{ ok = 0; fail = 0; reboot = $false; gameOk = 0; gameSkip = 0; gameFail = 0 }
         try {
             Enter-OptimizerLock   # impede outra instância (CLI/GUI) de escrever junto
             if ($rp) {
@@ -648,12 +650,31 @@ function Start-EngineJob {
                             Write-OptLog "Falha aplicando ${id}: $($_.Exception.Message)" 'ERROR'
                         }
                     }
+                    # ações por jogo (camada 2 — vêm do perfil JSON)
+                    if ($gameJson) {
+                        $game = ConvertFrom-Json -InputObject $gameJson
+                        foreach ($ga in @($game.porJogo)) {
+                            try {
+                                $res = Invoke-GameAction -Action $ga
+                                Write-OptLog "AÇÃO $($game.id)/$($ga.tipo): $res"
+                                if ("$res" -like 'ok*') { $result.gameOk++ } else { $result.gameSkip++ }
+                            } catch {
+                                $result.gameFail++
+                                Write-OptLog "Falha na ação $($ga.tipo) de $($game.id): $($_.Exception.Message)" 'ERROR'
+                            }
+                        }
+                    }
                 }
                 'revert' {
                     foreach ($id in $ids) {
                         $t = Get-TweakById -Id $id
                         try { Undo-Tweak -Tweak $t; $result.ok++ }
                         catch { $result.fail++; Write-OptLog "Falha revertendo ${id}: $($_.Exception.Message)" 'ERROR' }
+                    }
+                    if ($gameJson) {
+                        $game = ConvertFrom-Json -InputObject $gameJson
+                        try { Undo-GameActions -Profile $game; $result.gameOk++ }
+                        catch { $result.gameFail++; Write-OptLog "Falha revertendo ações de $($game.id): $($_.Exception.Message)" 'ERROR' }
                     }
                 }
                 'revert-all' { Undo-AllTweaks; $result.ok = 1 }
@@ -665,7 +686,7 @@ function Start-EngineJob {
             Exit-OptimizerLock
         }
         $result
-    }).AddArgument($script:CoreText).AddArgument($Action).AddArgument($Ids).AddArgument($RestorePoint)
+    }).AddArgument($script:CoreText).AddArgument($Action).AddArgument($Ids).AddArgument($RestorePoint).AddArgument($GameJson)
     $script:Job = @{ PS = $ps; Handle = $ps.BeginInvoke(); Action = $Action }
 }
 
@@ -684,9 +705,14 @@ function Complete-EngineJob {
     switch ($action) {
         'apply' {
             $msg = "✓ $($r.ok) tweak(s) aplicado(s) e verificado(s)"
+            if (($r.gameOk + $r.gameSkip + $r.gameFail) -gt 0) {
+                $msg += " · jogo: $($r.gameOk) ação(ões)"
+                if ($r.gameSkip -gt 0) { $msg += ", $($r.gameSkip) pulada(s)" }
+                if ($r.gameFail -gt 0) { $msg += ", $($r.gameFail) falhou(aram)" }
+            }
             if ($r.fail -gt 0) { $msg += " · $($r.fail) falhou(aram) — ver log" }
             if ($r.reboot)     { $msg += ' · reinicie o PC para todos valerem' }
-            Show-Banner $msg $(if ($r.fail -gt 0) { $Tok.Risk } else { $Tok.Gain })
+            Show-Banner $msg $(if (($r.fail + $r.gameFail) -gt 0) { $Tok.Risk } else { $Tok.Gain })
         }
         'revert' {
             $msg = "✓ $($r.ok) tweak(s) revertido(s)"
@@ -802,12 +828,13 @@ $script:Ui.OptimizeBtn.Add_Click({
     if ($script:SelectedGame) {
         $sistema = @($script:SelectedGame.sistema)
         $ids = @(Get-Tweaks | Where-Object { $_.Risco -ne 'Avançado' -and -not $script:Rows[$_.Id].Reason -and $sistema -contains $_.Id } | ForEach-Object { $_.Id })
-        Write-OptLog "OTIMIZAR: perfil $($script:SelectedGame.nome) — $($ids -join ', ')"
+        Write-OptLog "OTIMIZAR: perfil $($script:SelectedGame.nome) — $($ids -join ', ') + $(@($script:SelectedGame.porJogo).Count) ação(ões) do jogo"
+        Start-EngineJob -Action 'apply' -Ids $ids -RestorePoint $rp -GameJson (ConvertTo-Json $script:SelectedGame -Depth 8 -Compress)
     } else {
         $ids = @(Get-Tweaks | Where-Object { $_.Risco -ne 'Avançado' -and -not $script:Rows[$_.Id].Reason } | ForEach-Object { $_.Id })
         Write-OptLog "OTIMIZAR (um clique): preset Seguro+Moderado — $($ids -join ', ')"
+        Start-EngineJob -Action 'apply' -Ids $ids -RestorePoint $rp
     }
-    Start-EngineJob -Action 'apply' -Ids $ids -RestorePoint $rp
 })
 
 $script:Ui.ApplyBtn.Add_Click({

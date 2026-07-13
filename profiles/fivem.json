@@ -6,6 +6,12 @@
     "caminhos": ["%LOCALAPPDATA%\\FiveM"],
     "registro": []
   },
-  "sistema": ["GameDVR", "GameMode", "Power", "GpuPref", "NetThrottle", "PowerThrottle", "VisualFX"],
-  "porJogo": []
+  "sistema": ["GameDVR", "GameMode", "Power", "StickyKeys", "GpuPref", "NetThrottle", "PowerThrottle", "VisualFX", "Transparency"],
+  "porJogo": [
+    {
+      "tipo": "gpuPref",
+      "exes": ["%LOCALAPPDATA%\\FiveM\\FiveM.exe"],
+      "descricao": "forcar GPU dedicada (notebooks hibridos)"
+    }
+  ]
 }

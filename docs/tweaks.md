@@ -19,11 +19,23 @@ Risco: **Seguro** (efeito conhecido, sem colateral) · **Moderado** (efeito real
 - **Impacto:** o Windows prioriza o processo do jogo e suspende Windows Update/notificações durante a partida.
 - **Fonte:** Microsoft Learn — "Game Mode" (recurso oficial, ativo por padrão no Win10/11 recente; aqui só garantimos que está ligado).
 
-## Power — Plano Alto Desempenho (Seguro)
+## Power — Plano Ultimate / Alto Desempenho (Seguro)
 
-- **O que faz:** `powercfg /setactive 8c5e7fda-...` (High Performance). O GUID do plano anterior fica no backup.
-- **Impacto:** impede downclock agressivo da CPU em cargas variáveis; melhora consistência de frametime (não FPS máximo).
-- **Fonte:** Microsoft Learn — power plans / processor power management.
+- **O que faz:** `powercfg -duplicatescheme e9a42b02-...` (Ultimate Performance, oculto no Windows Home) e ativa a cópia; se a criação falhar, cai para Alto Desempenho (`8c5e7fda-...`). O GUID do plano anterior fica no backup e o plano criado é apagado no revert.
+- **Impacto:** impede downclock agressivo da CPU e elimina micro-latências de gerenciamento de energia; melhora consistência de frametime (não FPS máximo).
+- **Fonte:** Microsoft — Ultimate Performance power plan (Windows 10 1803+); Microsoft Learn — processor power management.
+
+## Transparency — Desativar transparência do Windows (Seguro)
+
+- **O que faz:** `HKCU\...\Themes\Personalize\EnableTransparency = 0`.
+- **Impacto:** remove o custo de GPU dos efeitos de acrílico/transparência da interface. Perceptível em PCs fracos e notebooks; complementa o VisualFX.
+- **Fonte:** configuração oficial do Windows (Configurações → Cores → Efeitos de transparência).
+
+## StickyKeys — Desativar popups de acessibilidade (Seguro)
+
+- **O que faz:** `HKCU\Control Panel\Accessibility`: `StickyKeys\Flags=506`, `ToggleKeys\Flags=58`, `Keyboard Response\Flags=122` (desliga o atalho e o popup, não o recurso em si para quem já usa).
+- **Impacto:** não afeta FPS — elimina o popup de Teclas de Aderência (Shift 5x) que rouba o foco do jogo no meio da partida.
+- **Fonte:** Microsoft — Accessibility shortcut keys / flags documentados do StickyKeys.
 
 ## MouseAccel — Desativar aceleração do mouse (Seguro)
 
@@ -82,6 +94,23 @@ Risco: **Seguro** (efeito conhecido, sem colateral) · **Moderado** (efeito real
 - **Fonte:** NVIDIA KB 5157 ("flickering/stuttering — disable MPO") e relatos equivalentes no suporte da AMD; a própria Microsoft usou esse valor de teste.
 
 ---
+
+## Ações por jogo (camada 2 — `profiles/*.json`, campo `porJogo`)
+
+Cada ação tem backup e revert, como os tweaks de sistema. Tipos suportados pelo motor:
+
+### gpuPref — forçar GPU dedicada por executável
+
+- **O que faz:** `HKCU\Software\Microsoft\DirectX\UserGpuPreferences\<caminho do exe> = "GpuPreference=2;"`.
+- **Impacto:** em notebook híbrido (dedicada + integrada), garante que o jogo NUNCA abre na GPU integrada — frequentemente o maior ganho único disponível. Em máquina sem GPU híbrida a ação é pulada (não escreve nada).
+- **Fonte:** Microsoft — Windows graphics performance preference (Settings → Display → Graphics), armazenamento documentado em UserGpuPreferences.
+
+### iniEdit — editar configuração do jogo
+
+- **O que faz:** edita `chave=valor` (com seção opcional) em arquivo .ini/.cfg do jogo. O arquivo ORIGINAL é copiado para `%LOCALAPPDATA%\Optimizer\filebackups\` antes da primeira edição; o revert restaura byte a byte.
+- **Se o arquivo não existe** (jogo nunca aberto), a ação é pulada com aviso — nunca cria config do zero.
+- **Exemplo em produção:** Fortnite `GameUserSettings.ini` → `[ScalabilityGroups]` com `sg.ShadowQuality=0`, `sg.PostProcessQuality=0`, `sg.EffectsQuality=0`, `sg.FoliageQuality=0` (sombras é o maior ganho isolado de FPS no Fortnite; fonte: documentação de escalabilidade da Unreal Engine).
+- **Nota honesta:** o jogo pode sobrescrever o arquivo ao salvar configurações — reaplicar é seguro (o backup original é preservado).
 
 ## Sobre otimizações específicas de NVIDIA/AMD
 

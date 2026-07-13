@@ -12,7 +12,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('list', 'status', 'apply', 'revert', 'revert-all', 'log', 'diag', 'games')]
+    [ValidateSet('list', 'status', 'apply', 'revert', 'revert-all', 'log', 'diag', 'games', 'apply-game', 'revert-game')]
     [string]$Command = 'list',
 
     [Parameter(Position = 1)]
@@ -146,6 +146,51 @@ switch ($Command) {
             @{ L = 'Rodando';   E = { if (Test-GameRunning $_) { 'SIM' } else { '-' } } }
             @{ L = 'Tweaks do perfil'; E = { @($_.sistema) -join ', ' } }
         )
+    }
+
+    'apply-game' {
+        if (-not $Ids -or $Ids.Count -eq 0) { throw 'Informe o id do jogo (ex.: apply-game valorant). Veja: games' }
+        $game = Get-GameProfiles | Where-Object { $_.id -eq $Ids[0] }
+        if (-not $game) { throw "Perfil '$($Ids[0])' não encontrado. Veja: games" }
+
+        $sistema = @($game.sistema)
+        $targets = @(Get-Tweaks | Where-Object { $_.Risco -ne 'Avançado' -and $sistema -contains $_.Id -and -not (Get-TweakUnavailableReason $_) })
+        Write-Host "Perfil $($game.nome): $($targets.Count) tweak(s) de sistema + $(@($game.porJogo).Count) ação(ões) do jogo" -ForegroundColor Cyan
+
+        if (-not $SkipRestorePoint -and (Test-IsAdmin) -and (Test-SystemRestoreEnabled)) {
+            Write-Host 'Criando ponto de restauração (pode demorar ~30s)...'
+            New-OptimizerRestorePoint | Out-Null
+        }
+
+        Enter-OptimizerLock
+        try {
+            foreach ($t in $targets) {
+                try { Invoke-Tweak -Tweak $t; Write-Host "  [ok] $($t.Id) (verificado)" -ForegroundColor Green }
+                catch { Write-Host "  [erro] $($t.Id): $($_.Exception.Message)" -ForegroundColor Red }
+            }
+            foreach ($ga in @($game.porJogo)) {
+                try {
+                    $res = Invoke-GameAction -Action $ga
+                    $cor = if ("$res" -like 'ok*') { 'Green' } else { 'Yellow' }
+                    Write-Host "  [$($ga.tipo)] $res" -ForegroundColor $cor
+                    Write-OptLog "AÇÃO $($game.id)/$($ga.tipo): $res"
+                } catch {
+                    Write-Host "  [erro] $($ga.tipo): $($_.Exception.Message)" -ForegroundColor Red
+                    Write-OptLog "Falha na ação $($ga.tipo) de $($game.id): $_" 'ERROR'
+                }
+            }
+        } finally { Exit-OptimizerLock }
+    }
+
+    'revert-game' {
+        if (-not $Ids -or $Ids.Count -eq 0) { throw 'Informe o id do jogo (ex.: revert-game valorant).' }
+        $game = Get-GameProfiles | Where-Object { $_.id -eq $Ids[0] }
+        if (-not $game) { throw "Perfil '$($Ids[0])' não encontrado. Veja: games" }
+        # Reverte só as ações POR JOGO (arquivos + GPU dedicada). Os tweaks de
+        # sistema são compartilhados entre jogos — reverta com 'revert'/'revert-all'.
+        Enter-OptimizerLock
+        try { Undo-GameActions -Profile $game } finally { Exit-OptimizerLock }
+        Write-Host "Ações do jogo '$($game.nome)' revertidas (tweaks de sistema: use revert/revert-all)."
     }
 
     'log' {

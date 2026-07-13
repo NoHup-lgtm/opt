@@ -6,6 +6,12 @@
     "caminhos": ["%ProgramFiles(x86)%\\Call of Duty", "%ProgramFiles%\\Call of Duty"],
     "registro": ["HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Call of Duty"]
   },
-  "sistema": ["GameDVR", "GameMode", "Power", "GpuPref", "NetThrottle", "PowerThrottle", "VisualFX"],
-  "porJogo": []
+  "sistema": ["GameDVR", "GameMode", "Power", "StickyKeys", "GpuPref", "NetThrottle", "PowerThrottle", "VisualFX", "Transparency"],
+  "porJogo": [
+    {
+      "tipo": "gpuPref",
+      "exes": ["%ProgramFiles(x86)%\\Call of Duty\\_retail_\\cod.exe", "%ProgramFiles%\\Call of Duty\\_retail_\\cod.exe"],
+      "descricao": "forcar GPU dedicada (notebooks hibridos)"
+    }
+  ]
 }

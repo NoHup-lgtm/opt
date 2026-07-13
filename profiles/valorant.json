@@ -6,6 +6,12 @@
     "caminhos": ["C:\\Riot Games\\VALORANT\\live"],
     "registro": ["HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Riot Game valorant.live"]
   },
-  "sistema": ["GameDVR", "GameMode", "Power", "MouseAccel", "GpuPref", "NetThrottle", "PowerThrottle"],
-  "porJogo": []
+  "sistema": ["GameDVR", "GameMode", "Power", "MouseAccel", "StickyKeys", "GpuPref", "NetThrottle", "PowerThrottle"],
+  "porJogo": [
+    {
+      "tipo": "gpuPref",
+      "exes": ["C:\\Riot Games\\VALORANT\\live\\ShooterGame\\Binaries\\Win64\\VALORANT-Win64-Shipping.exe"],
+      "descricao": "forcar GPU dedicada (notebooks hibridos)"
+    }
+  ]
 }

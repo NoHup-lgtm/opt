@@ -50,7 +50,7 @@ try {
 Write-Host "`n== Integridade do catálogo ==" -ForegroundColor Cyan
 
 $tweaks = @(Get-Tweaks)
-Assert ($tweaks.Count -ge 12) "catálogo tem >= 12 tweaks (tem $($tweaks.Count))"
+Assert ($tweaks.Count -ge 14) "catálogo tem >= 14 tweaks (tem $($tweaks.Count))"
 Assert ((@($tweaks.Id | Select-Object -Unique)).Count -eq $tweaks.Count) 'ids são únicos'
 
 foreach ($t in $tweaks) {
@@ -179,6 +179,15 @@ foreach ($p in $profiles) {
     $null = Test-GameInstalled -Profile $p
     $null = Test-GameRunning -Profile $p
     Assert $true "$($p.id): detecção roda sem erro"
+    # Ações porJogo bem formadas (tipos conhecidos + campos obrigatórios)
+    foreach ($a in @($p.porJogo)) {
+        $okA = switch ("$($a.tipo)") {
+            'iniEdit' { [bool]($a.arquivo -and $a.chave -and $null -ne $a.valor) }
+            'gpuPref' { @($a.exes).Count -gt 0 }
+            default   { $false }
+        }
+        Assert $okA "$($p.id): ação porJogo válida ($($a.tipo))"
+    }
 }
 
 # index.json (usado pelo get.ps1) tem que listar exatamente os perfis existentes
@@ -189,6 +198,45 @@ $onDisk = @(Get-ChildItem (Join-Path $script:ProfilesDir '*.json') | Where-Objec
 $soNoIndex = @($index | Where-Object { $_ -notin $onDisk })
 $soNoDisco = @($onDisk | Where-Object { $_ -notin $index })
 Assert ($soNoIndex.Count -eq 0 -and $soNoDisco.Count -eq 0) "index.json sincronizado com profiles/ $(if ($soNoIndex) { '(faltando no disco: ' + ($soNoIndex -join ',') + ')' })$(if ($soNoDisco) { '(faltando no index: ' + ($soNoDisco -join ',') + ')' })"
+
+# ---------------------------------------------------------------------------
+Write-Host "`n== Ações por jogo (iniEdit / gpuPref / backup de arquivo) ==" -ForegroundColor Cyan
+
+# Set-IniValue: substituir, adicionar em seção existente, criar seção nova
+$ini = Join-Path $testRoot 'teste.ini'
+@('[Video]', 'Quality=3', 'VSync=1', '', '[Audio]', 'Volume=10') | Set-Content -Path $ini -Encoding ASCII
+Set-IniValue -Path $ini -Section 'Video' -Key 'Quality' -Value '0'
+Assert ((Get-Content $ini) -contains 'Quality=0') 'iniEdit substitui chave existente na seção'
+Set-IniValue -Path $ini -Section 'Video' -Key 'FpsMax' -Value '240'
+$content = Get-Content $ini
+$vIdx = [array]::IndexOf($content, '[Video]'); $aIdx = [array]::IndexOf($content, '[Audio]')
+$fIdx = [array]::IndexOf($content, 'FpsMax=240')
+Assert ($fIdx -gt $vIdx -and $fIdx -lt $aIdx) 'iniEdit adiciona chave nova DENTRO da seção certa'
+Set-IniValue -Path $ini -Section 'Rede' -Key 'Nagle' -Value 'off'
+Assert (((Get-Content $ini) -contains '[Rede]') -and ((Get-Content $ini) -contains 'Nagle=off')) 'iniEdit cria seção nova quando não existe'
+Assert ((Get-Content $ini) -contains 'Volume=10') 'iniEdit preserva o resto do arquivo'
+
+# Backup de arquivo: original preservado, restore volta byte a byte
+$original = Get-Content $ini -Raw
+$acao = [pscustomobject]@{ tipo = 'iniEdit'; arquivo = $ini; secao = 'Video'; chave = 'Quality'; valor = '9' }
+$res = Invoke-GameAction -Action $acao
+Assert ("$res" -like 'ok*') "ação iniEdit aplica e retorna ok ($res)"
+Assert ((Get-Content $ini) -contains 'Quality=9') 'ação iniEdit alterou o arquivo'
+Restore-FileBacked -Path $ini
+Assert ((Get-Content $ini -Raw) -eq $original) 'restore de arquivo volta EXATAMENTE ao original'
+Assert (-not $script:Backup.ContainsKey("file|$ini")) 'entrada de backup de arquivo removida após restore'
+
+# iniEdit com arquivo inexistente = pulado (jogo nunca aberto), nunca erro
+$res = Invoke-GameAction -Action ([pscustomobject]@{ tipo = 'iniEdit'; arquivo = (Join-Path $testRoot 'nao-existe.ini'); chave = 'x'; valor = '1' })
+Assert ("$res" -like 'pulado*') "iniEdit sem arquivo é pulado com aviso ($res)"
+
+# gpuPref com exe inexistente = pulado (nunca escreve lixo no registro)
+$res = Invoke-GameAction -Action ([pscustomobject]@{ tipo = 'gpuPref'; exes = @('C:\jogo\que\nao\existe.exe') })
+Assert ("$res" -like 'pulado*') "gpuPref sem exe/GPU híbrida é pulado ($res)"
+
+# tipo desconhecido = pulado (perfil JSON futuro não pode quebrar app antigo)
+$res = Invoke-GameAction -Action ([pscustomobject]@{ tipo = 'foo' })
+Assert ("$res" -like 'pulado*') 'tipo de ação desconhecido é pulado sem quebrar'
 
 # ---------------------------------------------------------------------------
 Write-Host "`n== Ambiente e diagnóstico ==" -ForegroundColor Cyan

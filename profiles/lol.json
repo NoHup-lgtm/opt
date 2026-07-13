@@ -6,6 +6,12 @@
     "caminhos": ["C:\\Riot Games\\League of Legends"],
     "registro": ["HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Riot Game league_of_legends.live"]
   },
-  "sistema": ["GameDVR", "GameMode", "Power", "GpuPref", "NetThrottle", "Nagle", "PowerThrottle"],
-  "porJogo": []
+  "sistema": ["GameDVR", "GameMode", "Power", "StickyKeys", "GpuPref", "NetThrottle", "Nagle", "PowerThrottle"],
+  "porJogo": [
+    {
+      "tipo": "gpuPref",
+      "exes": ["C:\\Riot Games\\League of Legends\\Game\\League of Legends.exe"],
+      "descricao": "forcar GPU dedicada (notebooks hibridos)"
+    }
+  ]
 }

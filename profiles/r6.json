@@ -6,6 +6,12 @@
     "caminhos": ["%ProgramFiles(x86)%\\Steam\\steamapps\\common\\Tom Clancy's Rainbow Six Siege"],
     "registro": ["HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App 359550"]
   },
-  "sistema": ["GameDVR", "GameMode", "Power", "MouseAccel", "GpuPref", "NetThrottle", "PowerThrottle"],
-  "porJogo": []
+  "sistema": ["GameDVR", "GameMode", "Power", "MouseAccel", "StickyKeys", "GpuPref", "NetThrottle", "PowerThrottle"],
+  "porJogo": [
+    {
+      "tipo": "gpuPref",
+      "exes": ["%ProgramFiles(x86)%\\Steam\\steamapps\\common\\Tom Clancy's Rainbow Six Siege\\RainbowSix.exe"],
+      "descricao": "forcar GPU dedicada (notebooks hibridos)"
+    }
+  ]
 }

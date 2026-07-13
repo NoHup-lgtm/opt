@@ -6,6 +6,44 @@
     "caminhos": ["%ProgramFiles%\\Epic Games\\Fortnite"],
     "registro": []
   },
-  "sistema": ["GameDVR", "GameMode", "Power", "MouseAccel", "GpuPref", "NetThrottle", "PowerThrottle"],
-  "porJogo": []
+  "sistema": ["GameDVR", "GameMode", "Power", "MouseAccel", "StickyKeys", "GpuPref", "NetThrottle", "PowerThrottle"],
+  "porJogo": [
+    {
+      "tipo": "gpuPref",
+      "exes": ["%ProgramFiles%\\Epic Games\\Fortnite\\FortniteGame\\Binaries\\Win64\\FortniteClient-Win64-Shipping.exe"],
+      "descricao": "forcar GPU dedicada (notebooks hibridos)"
+    },
+    {
+      "tipo": "iniEdit",
+      "arquivo": "%LOCALAPPDATA%\\FortniteGame\\Saved\\Config\\WindowsClient\\GameUserSettings.ini",
+      "secao": "ScalabilityGroups",
+      "chave": "sg.PostProcessQuality",
+      "valor": "0",
+      "descricao": "pos-processamento no minimo"
+    },
+    {
+      "tipo": "iniEdit",
+      "arquivo": "%LOCALAPPDATA%\\FortniteGame\\Saved\\Config\\WindowsClient\\GameUserSettings.ini",
+      "secao": "ScalabilityGroups",
+      "chave": "sg.ShadowQuality",
+      "valor": "0",
+      "descricao": "sombras no minimo (maior ganho de FPS)"
+    },
+    {
+      "tipo": "iniEdit",
+      "arquivo": "%LOCALAPPDATA%\\FortniteGame\\Saved\\Config\\WindowsClient\\GameUserSettings.ini",
+      "secao": "ScalabilityGroups",
+      "chave": "sg.EffectsQuality",
+      "valor": "0",
+      "descricao": "efeitos no minimo"
+    },
+    {
+      "tipo": "iniEdit",
+      "arquivo": "%LOCALAPPDATA%\\FortniteGame\\Saved\\Config\\WindowsClient\\GameUserSettings.ini",
+      "secao": "ScalabilityGroups",
+      "chave": "sg.FoliageQuality",
+      "valor": "0",
+      "descricao": "vegetacao no minimo"
+    }
+  ]
 }
