@@ -1,0 +1,11 @@
+{
+  "id": "valorant",
+  "nome": "VALORANT",
+  "detect": {
+    "processo": "VALORANT-Win64-Shipping",
+    "caminhos": ["C:\\Riot Games\\VALORANT\\live"],
+    "registro": ["HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Riot Game valorant.live"]
+  },
+  "sistema": ["GameDVR", "GameMode", "Power", "MouseAccel", "GpuPref", "NetThrottle", "PowerThrottle"],
+  "porJogo": []
+}

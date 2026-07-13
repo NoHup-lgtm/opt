@@ -1,0 +1,11 @@
+{
+  "id": "fortnite",
+  "nome": "Fortnite",
+  "detect": {
+    "processo": "FortniteClient-Win64-Shipping",
+    "caminhos": ["%ProgramFiles%\\Epic Games\\Fortnite"],
+    "registro": []
+  },
+  "sistema": ["GameDVR", "GameMode", "Power", "MouseAccel", "GpuPref", "NetThrottle", "PowerThrottle"],
+  "porJogo": []
+}

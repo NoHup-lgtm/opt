@@ -12,6 +12,7 @@ $script:LogSink    = $null   # scriptblock opcional — espelha o log em outra s
 $script:Backup     = @{}
 $script:GpuCache   = $null
 $script:Mutex      = $null
+$script:ProfilesDir = $null   # definido pela CLI/GUI após carregar o Core (layout repo vs instalado)
 
 # ---------------------------------------------------------------------------
 # Infraestrutura: log e backup
@@ -155,6 +156,48 @@ function Get-MainGpu {
     if ($dgpu.Count -gt 0) { return $dgpu[0] }
     if ($g.Count -gt 0) { return $g[0] }
     return $null
+}
+
+# ---------------------------------------------------------------------------
+# Perfis de jogo (Fase 4 — data-driven): um JSON por jogo em profiles/.
+# Adicionar um jogo = soltar um JSON novo, SEM tocar em código.
+# ---------------------------------------------------------------------------
+
+function Get-GameProfiles {
+    if (-not $script:ProfilesDir -or -not (Test-Path $script:ProfilesDir)) { return @() }
+    $out = @()
+    foreach ($f in (Get-ChildItem -Path (Join-Path $script:ProfilesDir '*.json') | Where-Object { $_.Name -ne 'index.json' })) {
+        try {
+            $p = Get-Content -Path $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($p.id -and $p.nome -and $p.detect) { $out += $p }
+            else { Write-OptLog "perfil inválido (sem id/nome/detect): $($f.Name)" 'WARN' }
+        } catch {
+            Write-OptLog "perfil ilegível: $($f.Name) — $_" 'WARN'
+        }
+    }
+    $out
+}
+
+function Test-GameInstalled {
+    param([Parameter(Mandatory)]$Profile)
+    if ($Profile.detect.PSObject.Properties['caminhos']) {
+        foreach ($c in @($Profile.detect.caminhos)) {
+            if ($c -and (Test-Path ([Environment]::ExpandEnvironmentVariables($c)))) { return $true }
+        }
+    }
+    if ($Profile.detect.PSObject.Properties['registro']) {
+        foreach ($r in @($Profile.detect.registro)) {
+            if ($r -and (Test-Path $r)) { return $true }
+        }
+    }
+    $false
+}
+
+function Test-GameRunning {
+    param([Parameter(Mandatory)]$Profile)
+    if (-not $Profile.detect.PSObject.Properties['processo'] -or -not $Profile.detect.processo) { return $false }
+    $name = [IO.Path]::GetFileNameWithoutExtension($Profile.detect.processo)
+    [bool](Get-Process -Name $name -ErrorAction SilentlyContinue)
 }
 
 # ---------------------------------------------------------------------------

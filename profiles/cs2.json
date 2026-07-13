@@ -1,0 +1,11 @@
+{
+  "id": "cs2",
+  "nome": "Counter-Strike 2",
+  "detect": {
+    "processo": "cs2",
+    "caminhos": ["%ProgramFiles(x86)%\\Steam\\steamapps\\common\\Counter-Strike Global Offensive"],
+    "registro": ["HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App 730"]
+  },
+  "sistema": ["GameDVR", "GameMode", "Power", "MouseAccel", "GpuPref", "NetThrottle", "PowerThrottle"],
+  "porJogo": []
+}

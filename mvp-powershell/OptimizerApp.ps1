@@ -1,11 +1,14 @@
 ﻿# OptimizerApp.ps1 — painel WPF do Optimizer (MVP)
 #
-# Conceito visual: instrumento de diagnóstico de precisão (telemetria), NÃO "gamer RGB".
-# Tokens de design: ver CLAUDE.md.
+# Conceito visual: instrumento de diagnóstico de precisão, clean — janela sem
+# borda com cantos arredondados, toggles, botões pill. Tokens: ver CLAUDE.md.
 #
 # Regra 3 (inviolável): o readout de telemetria NUNCA mostra número inventado.
 # Ping e temperatura de GPU são medidos de verdade (ICMP / nvidia-smi);
 # FPS e 1% low ficam em "—" até o PresentMon (Fase 2).
+#
+# Jogos: perfis data-driven em profiles/*.json (detecção de instalado + em
+# execução). Selecionar um jogo marca os tweaks do perfil dele.
 
 param(
     [switch]$NoElevate,   # não auto-elevar (uso em dev)
@@ -37,6 +40,11 @@ if (-not $script:CoreText) {
 Invoke-Expression $script:CoreText
 Initialize-Optimizer
 
+# profiles/: instalado via get.ps1 = .\profiles ; repo dev = ..\profiles
+foreach ($cand in (Join-Path $PSScriptRoot 'profiles'), (Join-Path (Split-Path $PSScriptRoot -Parent) 'profiles')) {
+    if (Test-Path $cand) { $script:ProfilesDir = $cand; break }
+}
+
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
 
 # --- Tokens ----------------------------------------------------------------
@@ -61,140 +69,266 @@ $script:RiskColor = @{
 $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="OPT — otimizador" Width="1020" Height="740"
-        WindowStartupLocation="CenterScreen"
-        Background="$($Tok.Bg)" FontFamily="Segoe UI">
-  <Grid Margin="18">
-    <Grid.RowDefinitions>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="*"/>
-      <RowDefinition Height="Auto"/>
-      <RowDefinition Height="130"/>
-    </Grid.RowDefinitions>
+        Title="OPT — otimizador" Width="1160" Height="780"
+        WindowStartupLocation="CenterScreen" ResizeMode="CanMinimize"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        FontFamily="Segoe UI" TextOptions.TextRenderingMode="ClearType">
 
-    <!-- Cabeçalho -->
-    <DockPanel Grid.Row="0" Margin="2,0,2,14">
-      <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
-        <TextBlock Text="OPT" FontFamily="Consolas" FontSize="22" FontWeight="Bold" Foreground="$($Tok.Accent)"/>
-        <TextBlock Text="  otimizador · painel de controle" FontSize="13" Foreground="$($Tok.Mute)" VerticalAlignment="Center"/>
-      </StackPanel>
-      <StackPanel DockPanel.Dock="Right" HorizontalAlignment="Right" Orientation="Horizontal">
-        <TextBlock x:Name="GpuBadge" FontFamily="Consolas" FontSize="12" Foreground="$($Tok.Mute)" VerticalAlignment="Center" Margin="0,0,12,0"/>
-        <TextBlock x:Name="AdminBadge" FontFamily="Consolas" FontSize="12" Foreground="$($Tok.Dim)" VerticalAlignment="Center"/>
-      </StackPanel>
-    </DockPanel>
+  <Window.Resources>
+    <!-- toggle estilo switch -->
+    <Style x:Key="Switch" TargetType="CheckBox">
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Foreground" Value="$($Tok.Mute)"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <StackPanel Orientation="Horizontal" Background="Transparent">
+              <Border x:Name="Track" Width="38" Height="22" CornerRadius="11" Background="$($Tok.Line)" VerticalAlignment="Center">
+                <Ellipse x:Name="Thumb" Width="16" Height="16" Fill="$($Tok.Mute)" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="3,0,3,0"/>
+              </Border>
+              <ContentPresenter VerticalAlignment="Center" Margin="8,0,0,0"/>
+            </StackPanel>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Track" Property="Background" Value="$($Tok.Accent)"/>
+                <Setter TargetName="Thumb" Property="HorizontalAlignment" Value="Right"/>
+                <Setter TargetName="Thumb" Property="Fill" Value="$($Tok.Bg)"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False">
+                <Setter TargetName="Track" Property="Opacity" Value="0.35"/>
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
 
-    <!-- Readout de telemetria: só número REAL ou "—" -->
-    <Border Grid.Row="1" Background="$($Tok.Surface)" BorderBrush="$($Tok.Line)" BorderThickness="1" CornerRadius="8" Padding="16,12" Margin="0,0,0,12">
-      <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-        <StackPanel Grid.Column="0">
-          <TextBlock Text="FPS MÉDIO" FontFamily="Consolas" FontSize="11" Foreground="$($Tok.Mute)"/>
-          <TextBlock x:Name="FpsVal" Text="—" FontFamily="Consolas" FontSize="30" Foreground="$($Tok.Text)"/>
-          <TextBlock x:Name="FpsSub" Text="PresentMon — Fase 2" FontFamily="Consolas" FontSize="10" Foreground="$($Tok.Dim)"/>
+    <!-- botão pill com hover suave -->
+    <Style x:Key="Pill" TargetType="Button">
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Foreground" Value="$($Tok.Text)"/>
+      <Setter Property="Background" Value="$($Tok.Surface)"/>
+      <Setter Property="BorderBrush" Value="$($Tok.Line)"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="B" CornerRadius="10" Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="B" Property="Opacity" Value="0.82"/></Trigger>
+              <Trigger Property="IsPressed" Value="True"><Setter TargetName="B" Property="Opacity" Value="0.65"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter TargetName="B" Property="Opacity" Value="0.4"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <!-- scrollbar fininha -->
+    <Style TargetType="ScrollBar">
+      <Setter Property="Width" Value="8"/>
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ScrollBar">
+            <Track x:Name="PART_Track" IsDirectionReversed="True">
+              <Track.DecreaseRepeatButton>
+                <RepeatButton Opacity="0" Focusable="False"/>
+              </Track.DecreaseRepeatButton>
+              <Track.IncreaseRepeatButton>
+                <RepeatButton Opacity="0" Focusable="False"/>
+              </Track.IncreaseRepeatButton>
+              <Track.Thumb>
+                <Thumb>
+                  <Thumb.Template>
+                    <ControlTemplate TargetType="Thumb">
+                      <Border CornerRadius="4" Background="$($Tok.Line)" Margin="2,0,0,0"/>
+                    </ControlTemplate>
+                  </Thumb.Template>
+                </Thumb>
+              </Track.Thumb>
+            </Track>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+
+  <Border CornerRadius="14" Background="$($Tok.Bg)" BorderBrush="$($Tok.Line)" BorderThickness="1">
+    <Grid>
+      <Grid.RowDefinitions>
+        <RowDefinition Height="46"/>
+        <RowDefinition Height="*"/>
+      </Grid.RowDefinitions>
+
+      <!-- barra de título (arrastável) -->
+      <DockPanel Grid.Row="0" x:Name="TitleBar" Background="Transparent" Margin="20,8,10,0">
+        <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+          <TextBlock Text="OPT" FontFamily="Consolas" FontSize="20" FontWeight="Bold" Foreground="$($Tok.Accent)" VerticalAlignment="Center"/>
+          <TextBlock Text="  otimizador" FontSize="13" Foreground="$($Tok.Mute)" VerticalAlignment="Center"/>
         </StackPanel>
-        <StackPanel Grid.Column="1">
-          <TextBlock Text="1% LOW" FontFamily="Consolas" FontSize="11" Foreground="$($Tok.Mute)"/>
-          <TextBlock x:Name="LowVal" Text="—" FontFamily="Consolas" FontSize="30" Foreground="$($Tok.Text)"/>
-          <TextBlock x:Name="LowSub" Text="PresentMon — Fase 2" FontFamily="Consolas" FontSize="10" Foreground="$($Tok.Dim)"/>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+          <TextBlock x:Name="GpuBadge" FontFamily="Consolas" FontSize="11" Foreground="$($Tok.Mute)" VerticalAlignment="Center" Margin="0,0,10,0"/>
+          <TextBlock x:Name="AdminBadge" FontFamily="Consolas" FontSize="11" Foreground="$($Tok.Dim)" VerticalAlignment="Center" Margin="0,0,14,0"/>
+          <Button x:Name="MinBtn" Content="–" Style="{StaticResource Pill}" Width="32" Height="26" Padding="0"
+                  Background="Transparent" BorderBrush="Transparent" Foreground="$($Tok.Mute)"/>
+          <Button x:Name="CloseBtn" Content="✕" Style="{StaticResource Pill}" Width="32" Height="26" Padding="0" Margin="4,0,0,0"
+                  Background="Transparent" BorderBrush="Transparent" Foreground="$($Tok.Mute)"/>
         </StackPanel>
-        <StackPanel Grid.Column="2">
-          <TextBlock Text="PING" FontFamily="Consolas" FontSize="11" Foreground="$($Tok.Mute)"/>
-          <TextBlock x:Name="PingVal" Text="—" FontFamily="Consolas" FontSize="30" Foreground="$($Tok.Text)"/>
-          <TextBlock x:Name="PingSub" Text="medindo..." FontFamily="Consolas" FontSize="10" Foreground="$($Tok.Dim)"/>
-        </StackPanel>
-        <StackPanel Grid.Column="3">
-          <TextBlock Text="TEMP GPU" FontFamily="Consolas" FontSize="11" Foreground="$($Tok.Mute)"/>
-          <TextBlock x:Name="TempVal" Text="—" FontFamily="Consolas" FontSize="30" Foreground="$($Tok.Cold)"/>
-          <TextBlock x:Name="TempSub" Text="sem sensor legível" FontFamily="Consolas" FontSize="10" Foreground="$($Tok.Dim)"/>
-        </StackPanel>
-      </Grid>
-    </Border>
-
-    <!-- Banner de resultado -->
-    <Border Grid.Row="2" x:Name="Banner" Visibility="Collapsed" Background="$($Tok.Surface)" BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,0,0,12">
-      <TextBlock x:Name="BannerText" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"/>
-    </Border>
-
-    <!-- Lista de tweaks -->
-    <Border Grid.Row="3" Background="$($Tok.Surface2)" BorderBrush="$($Tok.Line2)" BorderThickness="1" CornerRadius="8" Padding="10">
-      <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel x:Name="TweaksPanel"/>
-      </ScrollViewer>
-    </Border>
-
-    <!-- Ações -->
-    <DockPanel Grid.Row="4" Margin="2,12,2,12">
-      <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
-        <CheckBox x:Name="RestoreChk" IsChecked="True" VerticalAlignment="Center" Foreground="$($Tok.Mute)" FontSize="12"
-                  Content="Ponto de restauração antes de aplicar"/>
-        <ProgressBar x:Name="Busy" IsIndeterminate="True" Width="110" Height="5" Margin="14,0,8,0" Visibility="Collapsed"
-                     Background="$($Tok.Surface)" Foreground="$($Tok.Accent)" BorderThickness="0"/>
-        <TextBlock x:Name="BusyText" FontFamily="Consolas" FontSize="11" Foreground="$($Tok.Accent)" VerticalAlignment="Center"/>
-      </StackPanel>
-      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-        <Button x:Name="RevertAllBtn" Content="DESFAZER TUDO" FontFamily="Consolas" FontSize="12" Padding="12,8" Margin="0,0,8,0"
-                Background="$($Tok.Surface)" Foreground="$($Tok.Risk)" BorderBrush="$($Tok.Risk)"/>
-        <Button x:Name="RevertBtn" Content="REVERTER SELEÇÃO" FontFamily="Consolas" FontSize="12" Padding="12,8" Margin="0,0,8,0"
-                Background="$($Tok.Surface)" Foreground="$($Tok.Mute)" BorderBrush="$($Tok.Line)"/>
-        <Button x:Name="ApplyBtn" Content="APLICAR SELEÇÃO" FontFamily="Consolas" FontSize="12" Padding="12,8" Margin="0,0,10,0"
-                Background="$($Tok.Surface)" Foreground="$($Tok.Text)" BorderBrush="$($Tok.Line)"/>
-        <Button x:Name="OptimizeBtn" Content="⚡ OTIMIZAR" FontFamily="Consolas" FontSize="13" FontWeight="Bold" Padding="22,8"
-                Background="$($Tok.Accent)" Foreground="#0C1116" BorderBrush="$($Tok.Accent)"/>
-      </StackPanel>
-    </DockPanel>
-
-    <!-- Log (transparência total: tudo que o app faz aparece aqui e no arquivo) -->
-    <Border Grid.Row="5" Background="$($Tok.Surface)" BorderBrush="$($Tok.Line)" BorderThickness="1" CornerRadius="8" Padding="8">
-      <DockPanel>
-        <DockPanel DockPanel.Dock="Top" Margin="4,0,4,4">
-          <TextBlock DockPanel.Dock="Left" FontFamily="Consolas" FontSize="10" Foreground="$($Tok.Dim)"
-                     Text="log — tudo que o app altera é registrado em %LOCALAPPDATA%\Optimizer\optimizer.log e é reversível"/>
-          <TextBlock x:Name="DiagLink" HorizontalAlignment="Right" FontFamily="Consolas" FontSize="10"
-                     Foreground="$($Tok.Cold)" Cursor="Hand" Text="[ exportar diagnóstico ]"/>
-        </DockPanel>
-        <TextBox x:Name="LogBox" IsReadOnly="True" TextWrapping="NoWrap" FontFamily="Consolas" FontSize="11"
-                 Background="Transparent" Foreground="$($Tok.Mute)" BorderThickness="0"
-                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"/>
       </DockPanel>
-    </Border>
-  </Grid>
+
+      <Grid Grid.Row="1" Margin="20,10,20,20">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="225"/>
+          <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- sidebar: jogos detectados (perfis JSON) -->
+        <Border Grid.Column="0" Background="$($Tok.Surface2)" BorderBrush="$($Tok.Line2)" BorderThickness="1" CornerRadius="12" Padding="12">
+          <DockPanel>
+            <TextBlock DockPanel.Dock="Top" Text="JOGOS DETECTADOS" FontFamily="Consolas" FontSize="10" Foreground="$($Tok.Dim)" Margin="4,2,0,10"/>
+            <TextBlock DockPanel.Dock="Bottom" x:Name="ShowAllLink" Text="mostrar todos os perfis" FontFamily="Consolas" FontSize="10"
+                       Foreground="$($Tok.Cold)" Cursor="Hand" Margin="4,10,0,2"/>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+              <StackPanel x:Name="GamesPanel"/>
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+
+        <!-- conteúdo principal -->
+        <Grid Grid.Column="1" Margin="16,0,0,0">
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="112"/>
+          </Grid.RowDefinitions>
+
+          <!-- readout de telemetria: só número REAL ou "—" -->
+          <Grid Grid.Row="0" Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Border Grid.Column="0" Background="$($Tok.Surface)" BorderBrush="$($Tok.Line2)" BorderThickness="1" CornerRadius="12" Padding="14,10" Margin="0,0,10,0">
+              <StackPanel>
+                <TextBlock Text="FPS MÉDIO" FontFamily="Consolas" FontSize="10" Foreground="$($Tok.Mute)"/>
+                <TextBlock x:Name="FpsVal" Text="—" FontFamily="Consolas" FontSize="30" Foreground="$($Tok.Text)"/>
+                <TextBlock x:Name="FpsSub" Text="PresentMon — Fase 2" FontFamily="Consolas" FontSize="9" Foreground="$($Tok.Dim)"/>
+              </StackPanel>
+            </Border>
+            <Border Grid.Column="1" Background="$($Tok.Surface)" BorderBrush="$($Tok.Line2)" BorderThickness="1" CornerRadius="12" Padding="14,10" Margin="0,0,10,0">
+              <StackPanel>
+                <TextBlock Text="1% LOW" FontFamily="Consolas" FontSize="10" Foreground="$($Tok.Mute)"/>
+                <TextBlock x:Name="LowVal" Text="—" FontFamily="Consolas" FontSize="30" Foreground="$($Tok.Text)"/>
+                <TextBlock x:Name="LowSub" Text="PresentMon — Fase 2" FontFamily="Consolas" FontSize="9" Foreground="$($Tok.Dim)"/>
+              </StackPanel>
+            </Border>
+            <Border Grid.Column="2" Background="$($Tok.Surface)" BorderBrush="$($Tok.Line2)" BorderThickness="1" CornerRadius="12" Padding="14,10" Margin="0,0,10,0">
+              <StackPanel>
+                <TextBlock Text="PING" FontFamily="Consolas" FontSize="10" Foreground="$($Tok.Mute)"/>
+                <TextBlock x:Name="PingVal" Text="—" FontFamily="Consolas" FontSize="30" Foreground="$($Tok.Text)"/>
+                <TextBlock x:Name="PingSub" Text="medindo..." FontFamily="Consolas" FontSize="9" Foreground="$($Tok.Dim)"/>
+              </StackPanel>
+            </Border>
+            <Border Grid.Column="3" Background="$($Tok.Surface)" BorderBrush="$($Tok.Line2)" BorderThickness="1" CornerRadius="12" Padding="14,10">
+              <StackPanel>
+                <TextBlock Text="TEMP GPU" FontFamily="Consolas" FontSize="10" Foreground="$($Tok.Mute)"/>
+                <TextBlock x:Name="TempVal" Text="—" FontFamily="Consolas" FontSize="30" Foreground="$($Tok.Cold)"/>
+                <TextBlock x:Name="TempSub" Text="sem sensor legível" FontFamily="Consolas" FontSize="9" Foreground="$($Tok.Dim)"/>
+              </StackPanel>
+            </Border>
+          </Grid>
+
+          <!-- banner de resultado -->
+          <Border Grid.Row="1" x:Name="Banner" Visibility="Collapsed" Background="$($Tok.Surface)" BorderThickness="1" CornerRadius="10" Padding="12,8" Margin="0,0,0,12">
+            <TextBlock x:Name="BannerText" FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"/>
+          </Border>
+
+          <!-- lista de tweaks -->
+          <Border Grid.Row="2" Background="$($Tok.Surface2)" BorderBrush="$($Tok.Line2)" BorderThickness="1" CornerRadius="12" Padding="8">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+              <StackPanel x:Name="TweaksPanel"/>
+            </ScrollViewer>
+          </Border>
+
+          <!-- ações -->
+          <DockPanel Grid.Row="3" Margin="2,14,2,14">
+            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+              <CheckBox x:Name="RestoreChk" IsChecked="True" Style="{StaticResource Switch}" FontSize="11"
+                        Content="ponto de restauração"/>
+              <ProgressBar x:Name="Busy" IsIndeterminate="True" Width="100" Height="4" Margin="14,0,8,0" Visibility="Collapsed"
+                           Background="$($Tok.Surface)" Foreground="$($Tok.Accent)" BorderThickness="0"/>
+              <TextBlock x:Name="BusyText" FontFamily="Consolas" FontSize="11" Foreground="$($Tok.Accent)" VerticalAlignment="Center"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+              <Button x:Name="RevertAllBtn" Content="DESFAZER TUDO" Style="{StaticResource Pill}" FontFamily="Consolas" FontSize="11" Padding="14,9" Margin="0,0,8,0"
+                      Foreground="$($Tok.Risk)" BorderBrush="$($Tok.Risk)"/>
+              <Button x:Name="RevertBtn" Content="REVERTER SELEÇÃO" Style="{StaticResource Pill}" FontFamily="Consolas" FontSize="11" Padding="14,9" Margin="0,0,8,0"
+                      Foreground="$($Tok.Mute)"/>
+              <Button x:Name="ApplyBtn" Content="APLICAR SELEÇÃO" Style="{StaticResource Pill}" FontFamily="Consolas" FontSize="11" Padding="14,9" Margin="0,0,10,0"/>
+              <Button x:Name="OptimizeBtn" Content="⚡ OTIMIZAR" Style="{StaticResource Pill}" FontFamily="Consolas" FontSize="13" FontWeight="Bold" Padding="24,9"
+                      Background="$($Tok.Accent)" BorderBrush="$($Tok.Accent)" Foreground="$($Tok.Bg)"/>
+            </StackPanel>
+          </DockPanel>
+
+          <!-- log -->
+          <Border Grid.Row="4" Background="$($Tok.Surface)" BorderBrush="$($Tok.Line2)" BorderThickness="1" CornerRadius="12" Padding="10,8">
+            <DockPanel>
+              <DockPanel DockPanel.Dock="Top" Margin="2,0,2,4">
+                <TextBlock DockPanel.Dock="Left" FontFamily="Consolas" FontSize="9" Foreground="$($Tok.Dim)"
+                           Text="log — tudo que o app altera é registrado e reversível"/>
+                <TextBlock x:Name="DiagLink" HorizontalAlignment="Right" FontFamily="Consolas" FontSize="9"
+                           Foreground="$($Tok.Cold)" Cursor="Hand" Text="[ exportar diagnóstico ]"/>
+              </DockPanel>
+              <TextBox x:Name="LogBox" IsReadOnly="True" TextWrapping="NoWrap" FontFamily="Consolas" FontSize="10"
+                       Background="Transparent" Foreground="$($Tok.Mute)" BorderThickness="0"
+                       VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Hidden"/>
+            </DockPanel>
+          </Border>
+        </Grid>
+      </Grid>
+    </Grid>
+  </Border>
 </Window>
 "@
 
 $window = [Windows.Markup.XamlReader]::Parse($xaml)
 
 $script:Ui = @{}
-foreach ($name in 'GpuBadge','AdminBadge','TweaksPanel','RestoreChk','ApplyBtn','RevertBtn','RevertAllBtn','OptimizeBtn',
+foreach ($name in 'TitleBar','MinBtn','CloseBtn','GpuBadge','AdminBadge','GamesPanel','ShowAllLink',
+                  'TweaksPanel','RestoreChk','ApplyBtn','RevertBtn','RevertAllBtn','OptimizeBtn',
                   'LogBox','DiagLink','Banner','BannerText','Busy','BusyText',
                   'FpsVal','FpsSub','LowVal','LowSub','PingVal','PingSub','TempVal','TempSub') {
     $script:Ui[$name] = $window.FindName($name)
 }
 
-$script:Ui.AdminBadge.Text = if (Test-IsAdmin) { '[ admin ]' } else { '[ sem admin — tweaks de sistema bloqueados ]' }
+# janela sem borda: arrastar pela barra de título + botões próprios
+$script:Ui.TitleBar.Add_MouseLeftButtonDown({ try { $window.DragMove() } catch { } })
+$script:Ui.CloseBtn.Add_Click({ $window.Close() })
+$script:Ui.MinBtn.Add_Click({ $window.WindowState = 'Minimized' })
 
-# GPU detectada no cabeçalho (informação real, base para os tweaks de GPU)
+$script:Ui.AdminBadge.Text = if (Test-IsAdmin) { '[ admin ]' } else { '[ sem admin ]' }
+
 $gpu = Get-MainGpu
 $script:Ui.GpuBadge.Text = if ($gpu) {
     $tipo = if ($gpu.Integrada) { 'integrada' } else { 'dedicada' }
     "[ $($gpu.Name) · $tipo ]"
 } else { '[ GPU não detectada ]' }
 
-# nvidia-smi disponível? (única leitura de temperatura de GPU confiável sem lib externa)
 $script:NvSmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($script:NvSmi) { $script:Ui.TempSub.Text = 'GPU · nvidia-smi · real' }
 
-# --- Linhas de tweak (construídas em código a partir do catálogo) -----------
+# --- Linhas de tweak ----------------------------------------------------------
 $script:Rows = @{}   # Id -> @{ Check; Dot; StatusText; Reason }
 
 function Update-RowStatus {
     foreach ($t in Get-Tweaks) {
         $row = $script:Rows[$t.Id]
-        if ($row.Reason) { continue }  # indisponível: estado fixo
+        if ($row.Reason) { continue }
         if (Test-TweakApplied $t) {
             $row.Dot.Fill = New-Brush $Tok.Gain
             $row.StatusText.Text = 'aplicado'
@@ -207,6 +341,8 @@ function Update-RowStatus {
     }
 }
 
+$switchStyle = $window.FindResource('Switch')
+
 foreach ($t in Get-Tweaks) {
     $reason = Get-TweakUnavailableReason -Tweak $t
 
@@ -214,9 +350,9 @@ foreach ($t in Get-Tweaks) {
     $border.Background = New-Brush $Tok.Surface
     $border.BorderBrush = New-Brush $Tok.Line2
     $border.BorderThickness = 1
-    $border.CornerRadius = 6
+    $border.CornerRadius = 10
     $border.Margin = '4,4,4,4'
-    $border.Padding = '12,10,12,10'
+    $border.Padding = '14,11,14,11'
     if ($reason) { $border.Opacity = 0.45 }
 
     $outer = New-Object Windows.Controls.StackPanel
@@ -229,8 +365,9 @@ foreach ($t in Get-Tweaks) {
     }
 
     $check = New-Object Windows.Controls.CheckBox
+    $check.Style = $switchStyle
     $check.VerticalAlignment = 'Center'
-    $check.Margin = '0,0,12,0'
+    $check.Margin = '0,0,14,0'
     $check.IsChecked = ($t.Risco -eq 'Seguro' -and -not $reason)  # pré-seleciona só o que é seguro
     $check.IsEnabled = -not $reason
     [Windows.Controls.Grid]::SetColumn($check, 0)
@@ -254,7 +391,7 @@ foreach ($t in Get-Tweaks) {
     $toggle.FontFamily = 'Consolas'; $toggle.FontSize = 11
     $toggle.Foreground = New-Brush $Tok.Cold
     $toggle.Cursor = [Windows.Input.Cursors]::Hand
-    $toggle.Margin = '0,4,0,0'
+    $toggle.Margin = '0,5,0,0'
     $texts.Children.Add($nome) | Out-Null
     $texts.Children.Add($desc) | Out-Null
     $texts.Children.Add($toggle) | Out-Null
@@ -265,7 +402,7 @@ foreach ($t in Get-Tweaks) {
     $chip.BorderBrush = New-Brush $script:RiskColor[$t.Risco]
     $chip.BorderThickness = 1
     $chip.CornerRadius = 9
-    $chip.Padding = '8,2,8,2'
+    $chip.Padding = '9,2,9,2'
     $chip.Margin = '12,0,12,0'
     $chip.VerticalAlignment = 'Center'
     $chipText = New-Object Windows.Controls.TextBlock
@@ -279,7 +416,7 @@ foreach ($t in Get-Tweaks) {
     $status = New-Object Windows.Controls.StackPanel
     $status.Orientation = 'Horizontal'
     $status.VerticalAlignment = 'Center'
-    $status.Width = 100
+    $status.Width = 96
     $dot = New-Object Windows.Shapes.Ellipse
     $dot.Width = 8; $dot.Height = 8
     $dot.Margin = '0,0,6,0'; $dot.VerticalAlignment = 'Center'
@@ -299,10 +436,10 @@ foreach ($t in Get-Tweaks) {
     [Windows.Controls.Grid]::SetColumn($status, 3)
     $grid.Children.Add($status) | Out-Null
 
-    # Painel de transparência: chave por chave, valor atual → valor novo
+    # painel de transparência: chave por chave, valor atual → valor novo
     $detail = New-Object Windows.Controls.StackPanel
     $detail.Visibility = 'Collapsed'
-    $detail.Margin = '30,8,0,2'
+    $detail.Margin = '52,8,0,2'
 
     $toggle.Add_MouseLeftButtonUp({
         if ($detail.Visibility -eq 'Visible') {
@@ -332,10 +469,120 @@ foreach ($t in Get-Tweaks) {
 
 Update-RowStatus
 
-# --- Execução em background (a UI nunca congela) -----------------------------
-# O trabalho roda num runspace próprio que recarrega o Core; o estado é
-# compartilhado via backup.json e o progresso via tail do arquivo de log.
+# --- Sidebar de jogos (perfis data-driven) -------------------------------------
+$script:GameCards    = @{}    # id -> @{ Profile; Border; Dot; Status }
+$script:SelectedGame = $null
+$script:ShowAllGames = $false
+$script:AutoSelected = $false
 
+function Select-GameProfile {
+    param($Profile)
+    $script:SelectedGame = $Profile
+    foreach ($id in $script:GameCards.Keys) {
+        $c = $script:GameCards[$id]
+        $c.Border.BorderBrush = if ($id -eq $Profile.id) { New-Brush $Tok.Accent } else { New-Brush $Tok.Line2 }
+    }
+    # marca os tweaks do perfil (só os disponíveis nesta máquina)
+    $sistema = @($Profile.sistema)
+    foreach ($t in Get-Tweaks) {
+        $row = $script:Rows[$t.Id]
+        if ($row.Reason) { continue }
+        $row.Check.IsChecked = ($sistema -contains $t.Id)
+    }
+    Write-OptLog "Perfil '$($Profile.nome)' selecionado — tweaks do perfil marcados."
+    Show-Banner "perfil $($Profile.nome): $($sistema.Count) tweaks marcados — revise e aplique" $Tok.Cold
+}
+
+function Build-GamesPanel {
+    $script:Ui.GamesPanel.Children.Clear()
+    $script:GameCards = @{}
+    $profiles = @(Get-GameProfiles)
+    $shown = 0
+    foreach ($p in $profiles) {
+        $installed = Test-GameInstalled -Profile $p
+        if (-not $installed -and -not $script:ShowAllGames) { continue }
+        $shown++
+
+        $card = New-Object Windows.Controls.Border
+        $card.Background = New-Brush $Tok.Surface
+        $card.BorderBrush = New-Brush $Tok.Line2
+        $card.BorderThickness = 1
+        $card.CornerRadius = 10
+        $card.Margin = '2,3,2,3'
+        $card.Padding = '11,9,11,9'
+        $card.Cursor = [Windows.Input.Cursors]::Hand
+        if (-not $installed) { $card.Opacity = 0.5 }
+
+        $stack = New-Object Windows.Controls.StackPanel
+        $nomeTb = New-Object Windows.Controls.TextBlock
+        $nomeTb.Text = $p.nome
+        $nomeTb.FontSize = 13; $nomeTb.FontWeight = 'SemiBold'
+        $nomeTb.Foreground = New-Brush $Tok.Text
+        $statusRow = New-Object Windows.Controls.StackPanel
+        $statusRow.Orientation = 'Horizontal'
+        $statusRow.Margin = '0,3,0,0'
+        $gdot = New-Object Windows.Shapes.Ellipse
+        $gdot.Width = 7; $gdot.Height = 7
+        $gdot.Margin = '0,0,5,0'; $gdot.VerticalAlignment = 'Center'
+        $gdot.Fill = New-Brush $(if ($installed) { $Tok.Mute } else { $Tok.Dim })
+        $gstatus = New-Object Windows.Controls.TextBlock
+        $gstatus.Text = if ($installed) { 'instalado' } else { 'não detectado' }
+        $gstatus.FontFamily = 'Consolas'; $gstatus.FontSize = 10
+        $gstatus.Foreground = New-Brush $Tok.Dim
+        $statusRow.Children.Add($gdot) | Out-Null
+        $statusRow.Children.Add($gstatus) | Out-Null
+        $stack.Children.Add($nomeTb) | Out-Null
+        $stack.Children.Add($statusRow) | Out-Null
+        $card.Child = $stack
+
+        $card.Add_MouseLeftButtonUp({ Select-GameProfile -Profile $p }.GetNewClosure())
+
+        $script:Ui.GamesPanel.Children.Add($card) | Out-Null
+        $script:GameCards[$p.id] = @{ Profile = $p; Border = $card; Dot = $gdot; Status = $gstatus }
+    }
+    if ($shown -eq 0) {
+        $none = New-Object Windows.Controls.TextBlock
+        $none.Text = if ($profiles.Count -eq 0) { 'nenhum perfil em profiles\' } else { 'nenhum jogo detectado neste PC' }
+        $none.FontFamily = 'Consolas'; $none.FontSize = 11
+        $none.TextWrapping = 'Wrap'
+        $none.Foreground = New-Brush $Tok.Dim
+        $none.Margin = '4,4,4,4'
+        $script:Ui.GamesPanel.Children.Add($none) | Out-Null
+    }
+}
+
+function Update-GameStatus {
+    # marca ao vivo o que está em execução; se nada foi selecionado ainda,
+    # seleciona sozinho o perfil do jogo rodando (uma vez só)
+    foreach ($id in $script:GameCards.Keys) {
+        $c = $script:GameCards[$id]
+        if (Test-GameRunning -Profile $c.Profile) {
+            $c.Dot.Fill = New-Brush $Tok.Gain
+            $c.Status.Text = 'em execução'
+            $c.Status.Foreground = New-Brush $Tok.Gain
+            if (-not $script:SelectedGame -and -not $script:AutoSelected) {
+                $script:AutoSelected = $true
+                Select-GameProfile -Profile $c.Profile
+                Show-Banner "$($c.Profile.nome) detectado em execução — perfil carregado, revise e aplique" $Tok.Gain
+            }
+        } elseif ($c.Status.Text -eq 'em execução') {
+            $c.Dot.Fill = New-Brush $Tok.Mute
+            $c.Status.Text = 'instalado'
+            $c.Status.Foreground = New-Brush $Tok.Dim
+        }
+    }
+}
+
+$script:Ui.ShowAllLink.Add_MouseLeftButtonUp({
+    $script:ShowAllGames = -not $script:ShowAllGames
+    $script:Ui.ShowAllLink.Text = if ($script:ShowAllGames) { 'mostrar só detectados' } else { 'mostrar todos os perfis' }
+    Build-GamesPanel
+    Update-GameStatus
+})
+
+Build-GamesPanel
+
+# --- Execução em background (a UI nunca congela) -----------------------------
 $script:Job = $null
 
 function Set-Busy {
@@ -495,6 +742,7 @@ $script:Timer.Add_Tick({
     $script:Tick++
     Update-LogView
     Update-Telemetry
+    if (($script:Tick % 12) -eq 2) { Update-GameStatus }   # ~5s: jogo em execução?
     if ($script:Job -and $script:Job.Handle.IsCompleted) { Complete-EngineJob }
 })
 
@@ -527,13 +775,19 @@ function Resolve-RestorePointChoice {
     }
 }
 
-# Um clique: aplica todo o preset Seguro+Moderado disponível nesta máquina.
-# Avançado NUNCA entra em lote (regra 5) — só via seleção manual.
+# Um clique: com jogo selecionado, aplica o perfil dele; sem jogo, o preset
+# Seguro+Moderado. Avançado NUNCA entra em lote (regra 5) — só seleção manual.
 $script:Ui.OptimizeBtn.Add_Click({
     $rp = Resolve-RestorePointChoice
     if ($null -eq $rp) { return }
-    $ids = @(Get-Tweaks | Where-Object { $_.Risco -ne 'Avançado' -and -not $script:Rows[$_.Id].Reason } | ForEach-Object { $_.Id })
-    Write-OptLog "OTIMIZAR (um clique): preset Seguro+Moderado — $($ids -join ', ')"
+    if ($script:SelectedGame) {
+        $sistema = @($script:SelectedGame.sistema)
+        $ids = @(Get-Tweaks | Where-Object { $_.Risco -ne 'Avançado' -and -not $script:Rows[$_.Id].Reason -and $sistema -contains $_.Id } | ForEach-Object { $_.Id })
+        Write-OptLog "OTIMIZAR: perfil $($script:SelectedGame.nome) — $($ids -join ', ')"
+    } else {
+        $ids = @(Get-Tweaks | Where-Object { $_.Risco -ne 'Avançado' -and -not $script:Rows[$_.Id].Reason } | ForEach-Object { $_.Id })
+        Write-OptLog "OTIMIZAR (um clique): preset Seguro+Moderado — $($ids -join ', ')"
+    }
     Start-EngineJob -Action 'apply' -Ids $ids -RestorePoint $rp
 })
 
@@ -543,15 +797,6 @@ $script:Ui.ApplyBtn.Add_Click({
     $rp = Resolve-RestorePointChoice
     if ($null -eq $rp) { return }
     Start-EngineJob -Action 'apply' -Ids $ids -RestorePoint $rp
-})
-
-$script:Ui.DiagLink.Add_MouseLeftButtonUp({
-    try {
-        $zip = Export-OptimizerDiagnostic
-        Show-Banner "✓ diagnóstico salvo em: $zip (nada é enviado — você decide se manda)" $Tok.Cold
-    } catch {
-        Show-Banner "falha exportando diagnóstico: $($_.Exception.Message)" $Tok.Risk
-    }
 })
 
 $script:Ui.RevertBtn.Add_Click({
@@ -571,12 +816,24 @@ $script:Ui.RevertAllBtn.Add_Click({
     }
 })
 
+$script:Ui.DiagLink.Add_MouseLeftButtonUp({
+    try {
+        $zip = Export-OptimizerDiagnostic
+        Show-Banner "✓ diagnóstico salvo em: $zip (nada é enviado — você decide se manda)" $Tok.Cold
+    } catch {
+        Show-Banner "falha exportando diagnóstico: $($_.Exception.Message)" $Tok.Risk
+    }
+})
+
 Write-OptLog 'Painel aberto.'
 Update-LogView
+Update-GameStatus
 
 if ($RenderTest) {
     $unavailable = @(Get-Tweaks | Where-Object { $script:Rows[$_.Id].Reason }).Count
-    Write-Host "RENDERTEST OK — janela montada com $($script:Rows.Count) tweaks ($unavailable indisponíveis nesta máquina). GPU: $($script:Ui.GpuBadge.Text)"
+    $nGames = @(Get-GameProfiles).Count
+    $nInstalled = @(Get-GameProfiles | Where-Object { Test-GameInstalled -Profile $_ }).Count
+    Write-Host "RENDERTEST OK — $($script:Rows.Count) tweaks ($unavailable indisponíveis) · $nGames perfis de jogo ($nInstalled instalados) · GPU: $($script:Ui.GpuBadge.Text)"
     exit 0
 }
 

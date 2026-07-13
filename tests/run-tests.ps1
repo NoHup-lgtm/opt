@@ -160,6 +160,37 @@ $r2 = $ps.Invoke(); $ps.Dispose()
 Assert ("$r2" -eq 'acquired') 'trava liberada permite nova instância'
 
 # ---------------------------------------------------------------------------
+Write-Host "`n== Perfis de jogo (data-driven) ==" -ForegroundColor Cyan
+
+$script:ProfilesDir = Join-Path $repoRoot 'profiles'
+$profiles = @(Get-GameProfiles)
+Assert ($profiles.Count -ge 8) "profiles/ carrega >= 8 perfis (tem $($profiles.Count))"
+Assert ((@($profiles.id | Select-Object -Unique)).Count -eq $profiles.Count) 'ids de perfil são únicos'
+
+$tweakIds = @(Get-Tweaks).Id
+foreach ($p in $profiles) {
+    Assert ([bool]($p.id -and $p.nome -and $p.detect)) "$($p.id): campos obrigatórios (id/nome/detect)"
+    $temDeteccao = ($p.detect.PSObject.Properties['processo'] -and $p.detect.processo) -or
+                   ($p.detect.PSObject.Properties['caminhos'] -and @($p.detect.caminhos).Count -gt 0)
+    Assert $temDeteccao "$($p.id): tem ao menos um critério de detecção"
+    $desconhecidos = @($p.sistema | Where-Object { $_ -notin $tweakIds })
+    Assert ($desconhecidos.Count -eq 0) "$($p.id): todos os tweaks do perfil existem no catálogo$(if ($desconhecidos) { ' (desconhecidos: ' + ($desconhecidos -join ',') + ')' })"
+    # Detecção não pode lançar erro em máquina sem o jogo
+    $null = Test-GameInstalled -Profile $p
+    $null = Test-GameRunning -Profile $p
+    Assert $true "$($p.id): detecção roda sem erro"
+}
+
+# index.json (usado pelo get.ps1) tem que listar exatamente os perfis existentes
+# -InputObject (não pipeline): no PS 5.1 o pipeline entrega o array JSON como
+# objeto único e o @() aninharia errado
+$index = @([string[]](ConvertFrom-Json -InputObject (Get-Content (Join-Path $script:ProfilesDir 'index.json') -Raw -Encoding UTF8)))
+$onDisk = @(Get-ChildItem (Join-Path $script:ProfilesDir '*.json') | Where-Object { $_.Name -ne 'index.json' } | ForEach-Object { $_.Name })
+$soNoIndex = @($index | Where-Object { $_ -notin $onDisk })
+$soNoDisco = @($onDisk | Where-Object { $_ -notin $index })
+Assert ($soNoIndex.Count -eq 0 -and $soNoDisco.Count -eq 0) "index.json sincronizado com profiles/ $(if ($soNoIndex) { '(faltando no disco: ' + ($soNoIndex -join ',') + ')' })$(if ($soNoDisco) { '(faltando no index: ' + ($soNoDisco -join ',') + ')' })"
+
+# ---------------------------------------------------------------------------
 Write-Host "`n== Ambiente e diagnóstico ==" -ForegroundColor Cyan
 
 $sre = Test-SystemRestoreEnabled

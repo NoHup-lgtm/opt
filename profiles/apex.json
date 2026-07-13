@@ -1,0 +1,11 @@
+{
+  "id": "apex",
+  "nome": "Apex Legends",
+  "detect": {
+    "processo": "r5apex",
+    "caminhos": ["%ProgramFiles(x86)%\\Steam\\steamapps\\common\\Apex Legends"],
+    "registro": ["HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App 1172470"]
+  },
+  "sistema": ["GameDVR", "GameMode", "Power", "MouseAccel", "GpuPref", "NetThrottle", "PowerThrottle"],
+  "porJogo": []
+}

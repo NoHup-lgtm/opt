@@ -1,0 +1,11 @@
+{
+  "id": "fivem",
+  "nome": "GTA RP (FiveM)",
+  "detect": {
+    "processo": "FiveM",
+    "caminhos": ["%LOCALAPPDATA%\\FiveM"],
+    "registro": []
+  },
+  "sistema": ["GameDVR", "GameMode", "Power", "GpuPref", "NetThrottle", "PowerThrottle", "VisualFX"],
+  "porJogo": []
+}

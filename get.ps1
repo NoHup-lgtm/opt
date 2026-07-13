@@ -14,7 +14,7 @@
 $ErrorActionPreference = 'Stop'
 
 if (-not (Get-Variable -Name BaseUrl -ErrorAction SilentlyContinue) -or -not $BaseUrl) {
-    $BaseUrl = 'https://raw.githubusercontent.com/NoHup-lgtm/opt/main/mvp-powershell'
+    $BaseUrl = 'https://raw.githubusercontent.com/NoHup-lgtm/opt/main'
 }
 if (-not (Get-Variable -Name NoLaunch -ErrorAction SilentlyContinue)) { $NoLaunch = $false }
 
@@ -27,8 +27,21 @@ New-Item -ItemType Directory -Path $dir -Force | Out-Null
 foreach ($f in 'OptimizerCore.ps1', 'OptimizerApp.ps1') {
     $dest = Join-Path $dir $f
     Write-Host "baixando $f..." -ForegroundColor DarkGray
-    Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$f" -OutFile $dest
+    Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/mvp-powershell/$f" -OutFile $dest
     Unblock-File -Path $dest -ErrorAction SilentlyContinue
+}
+
+# perfis de jogo (deteccao + tweaks por jogo) - lista vem do index.json
+$pdir = Join-Path $dir 'profiles'
+New-Item -ItemType Directory -Path $pdir -Force | Out-Null
+try {
+    $index = Invoke-RestMethod -UseBasicParsing -Uri "$BaseUrl/profiles/index.json"
+    foreach ($pf in @($index)) {
+        Write-Host "baixando perfil $pf..." -ForegroundColor DarkGray
+        Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/profiles/$pf" -OutFile (Join-Path $pdir $pf)
+    }
+} catch {
+    Write-Host "aviso: nao consegui baixar os perfis de jogo ($($_.Exception.Message)) - o painel funciona sem eles" -ForegroundColor Yellow
 }
 
 Write-Host "OK - instalado em $dir" -ForegroundColor Green

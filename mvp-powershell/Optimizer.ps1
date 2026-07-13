@@ -12,7 +12,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('list', 'status', 'apply', 'revert', 'revert-all', 'log', 'diag')]
+    [ValidateSet('list', 'status', 'apply', 'revert', 'revert-all', 'log', 'diag', 'games')]
     [string]$Command = 'list',
 
     [Parameter(Position = 1)]
@@ -24,6 +24,11 @@ param(
 
 . (Join-Path $PSScriptRoot 'OptimizerCore.ps1')
 Initialize-Optimizer
+
+# profiles/: repo dev = ..\profiles ; instalado via get.ps1 = .\profiles
+foreach ($cand in (Join-Path (Split-Path $PSScriptRoot -Parent) 'profiles'), (Join-Path $PSScriptRoot 'profiles')) {
+    if (Test-Path $cand) { $script:ProfilesDir = $cand; break }
+}
 
 function Resolve-Targets {
     if ($All) {
@@ -129,6 +134,18 @@ switch ($Command) {
     'diag' {
         $zip = Export-OptimizerDiagnostic
         Write-Host "Diagnóstico exportado: $zip"
+    }
+
+    'games' {
+        $profiles = @(Get-GameProfiles)
+        if ($profiles.Count -eq 0) { Write-Host "Nenhum perfil encontrado em: $script:ProfilesDir"; break }
+        $profiles | Format-Table -AutoSize -Wrap @(
+            @{ L = 'Id';        E = { $_.id } }
+            @{ L = 'Jogo';      E = { $_.nome } }
+            @{ L = 'Instalado'; E = { if (Test-GameInstalled $_) { 'SIM' } else { '-' } } }
+            @{ L = 'Rodando';   E = { if (Test-GameRunning $_) { 'SIM' } else { '-' } } }
+            @{ L = 'Tweaks do perfil'; E = { @($_.sistema) -join ', ' } }
+        )
     }
 
     'log' {

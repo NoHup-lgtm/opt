@@ -1,0 +1,11 @@
+{
+  "id": "warzone",
+  "nome": "Warzone",
+  "detect": {
+    "processo": "cod",
+    "caminhos": ["%ProgramFiles(x86)%\\Call of Duty", "%ProgramFiles%\\Call of Duty"],
+    "registro": ["HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Call of Duty"]
+  },
+  "sistema": ["GameDVR", "GameMode", "Power", "GpuPref", "NetThrottle", "PowerThrottle", "VisualFX"],
+  "porJogo": []
+}

@@ -1,0 +1,11 @@
+{
+  "id": "r6",
+  "nome": "Rainbow Six Siege",
+  "detect": {
+    "processo": "RainbowSix",
+    "caminhos": ["%ProgramFiles(x86)%\\Steam\\steamapps\\common\\Tom Clancy's Rainbow Six Siege"],
+    "registro": ["HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App 359550"]
+  },
+  "sistema": ["GameDVR", "GameMode", "Power", "MouseAccel", "GpuPref", "NetThrottle", "PowerThrottle"],
+  "porJogo": []
+}

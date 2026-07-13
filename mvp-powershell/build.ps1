@@ -22,6 +22,15 @@ $mergedPath = Join-Path $dist 'OptimizerApp.merged.ps1'
 [IO.File]::WriteAllText($mergedPath, $merged, (New-Object Text.UTF8Encoding $true))
 Write-Host "Gerado: $mergedPath"
 
+# Perfis de jogo viajam junto do .exe (data-driven: o app lê .\profiles)
+$profSrc = Join-Path (Split-Path $root -Parent) 'profiles'
+if (Test-Path $profSrc) {
+    $profDst = Join-Path $dist 'profiles'
+    New-Item -ItemType Directory -Path $profDst -Force | Out-Null
+    Copy-Item (Join-Path $profSrc '*.json') $profDst -Force
+    Write-Host "Copiado: profiles\ ($(@(Get-ChildItem $profDst).Count) arquivos)"
+}
+
 if (Get-Command Invoke-PS2EXE -ErrorAction SilentlyContinue) {
     $exePath = Join-Path $dist 'Optimizer.exe'
     Invoke-PS2EXE -InputFile $mergedPath -OutputFile $exePath -NoConsole -RequireAdmin -Title 'Optimizer' -STA

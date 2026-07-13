@@ -1,0 +1,11 @@
+{
+  "id": "lol",
+  "nome": "League of Legends",
+  "detect": {
+    "processo": "League of Legends",
+    "caminhos": ["C:\\Riot Games\\League of Legends"],
+    "registro": ["HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Riot Game league_of_legends.live"]
+  },
+  "sistema": ["GameDVR", "GameMode", "Power", "GpuPref", "NetThrottle", "Nagle", "PowerThrottle"],
+  "porJogo": []
+}
