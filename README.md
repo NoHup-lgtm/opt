@@ -5,7 +5,17 @@ tudo 100% reversível. Contexto completo do produto e regras em [CLAUDE.md](CLAU
 
 ## Rodar o MVP (PowerShell)
 
-Painel (WPF — pede elevação, os tweaks de sistema precisam de admin):
+**Na máquina do cliente (validação) — um comando, sem clonar nada:**
+
+```powershell
+irm https://raw.githubusercontent.com/NoHup-lgtm/opt/main/get.ps1 | iex
+```
+
+Baixa motor + painel para `%LOCALAPPDATA%\Optimizer\app` e abre o painel (UAC).
+Requer este repo público no GitHub. Para o produto vendido, o caminho continua
+sendo o .exe assinado (`docs/distribuicao.md`).
+
+**Localmente (dev):**
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File mvp-powershell\OptimizerApp.ps1
